@@ -97,9 +97,11 @@ type MQTTPublisher struct {
 	stalled   mqtt.Token
 	stalledAt time.Time
 	// wedgeAfter is how long a stall may last before the connection is
-	// replaced.  Past KeepAlive plus PingTimeout the link has proved itself
-	// alive (or paho would have dropped it) yet still not acknowledged the
-	// publish, so waiting longer will not help.
+	// replaced.  KeepAlive plus PingTimeout is when paho's own ping notices
+	// a dead link; twice that leaves paho to handle the ordinary case, so
+	// this only catches a link that answers pings yet never acknowledges
+	// the publish, where waiting longer will not help.  (ups-mqtt found the
+	// guard racing paho's ping at 1x on Linux; fixed there in 9922394.)
 	wedgeAfter time.Duration
 
 	// lastFailed is whether the most recent publish failed.  Close then
@@ -137,7 +139,7 @@ func NewMQTTPublisherWith(cfg Options, lwtTopic, lwtPayload string, tn Tuning) (
 		reconnect:   tn.Reconnect,
 		wait:        retry.Sleep,
 		reconnected: make(chan struct{}, 1),
-		wedgeAfter:  tn.KeepAlive + tn.PingTimeout,
+		wedgeAfter:  2 * (tn.KeepAlive + tn.PingTimeout),
 	}
 
 	opts := mqtt.NewClientOptions()
