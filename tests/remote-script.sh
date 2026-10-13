@@ -34,7 +34,7 @@ esac'
 shim journalctl '[ "${FAIL_VERIFY:-}" = journal ] || echo "netmon[1]: connected to MQTT broker tcp://127.0.0.1:1883"'
 shim mosquitto_sub '
 [ "${FAIL_VERIFY:-}" = garibaldi ] && exit 27
-echo "{\"timestamp\":\"2026-10-13T22:00:00Z\",\"online\":true,\"status\":\"ok\"}"'
+echo "{\"timestamp\":\"2026-10-13T22:00:00Z\",\"online\":true,\"status\":\"ok\",\"link\":{\"status\":\"connected\"}}"'
 shim mosquitto_pub 'echo "mosquitto_pub $*" >> "$STATE/calls"'
 
 # A payload tree as deploy.sh stages it, with a script for the binary.

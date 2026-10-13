@@ -121,7 +121,7 @@ verify() {  # $1: config in force
   got="$(mosquitto_sub -h "$GARIBALDI_IP" -t "$topic" -R -C 1 -W 30 2>/dev/null || true)"
   [ -n "$got" ] || { echo "    no live $topic on garibaldi within 30 s"; return 1; }
   case "$got" in *'"online":true'*) ;; *) echo "    $topic on garibaldi is not online: $got"; return 1 ;; esac
-  info "garibaldi received a live $topic via the bridge: status $(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' <<<"$got")"
+  info "garibaldi received a live $topic via the bridge: status $(grep -o '"status":"[^"]*"' <<<"$got" | head -1 | cut -d'"' -f4)"
 }
 
 restore() {
