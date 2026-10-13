@@ -62,7 +62,8 @@ site_id() { awk -F'"' '/^\[site\]/{s=1;next} /^\[/{s=0} s && /^[[:space:]]*id[[:
 BACKUP=""
 backup() {
   if [ -z "$BACKUP" ]; then
-    BACKUP="$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$BACKUP"
+    # Unique per run: two runs in the same second must not share (and nest) one.
+    mkdir -p "$BACKUP_ROOT"; BACKUP="$(mktemp -d "$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S).XXXX")"
     info "backing up to ${BACKUP#"$ROOT"}"
   fi
   local p; for p in "$@"; do
