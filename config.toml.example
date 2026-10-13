@@ -1,0 +1,26 @@
+# netmon — pi3b-schoolhouse. Copy to /etc/netmon/config.toml.
+
+state_dir = "/var/lib/netmon"   # systemd's StateDirectory; outage state across restarts
+
+[site]
+id = "schoolhouse"              # as in the swee.net "sites" config; topics are sites/<id>/network/...
+
+[probe]
+interval    = "10s"
+down_after  = 3                 # rounds failing before the status gets worse (~30 s)
+up_after    = 2                 # rounds passing before it gets better
+count       = 3                 # ICMP echoes per host per round
+timeout     = "1s"              # per echo / connect / lookup
+# gateway   = "192.168.0.1"     # default: the default route's gateway, read each round
+internet    = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]   # down only if all fail
+dns_server  = "1.1.1.1:53"      # bypasses MagicDNS
+dns_name    = "example.com"
+broker_addr = "100.64.0.20:1883"   # garibaldi, as the bridge reaches it
+tailscale_peer = "garibaldi"
+degraded_loss_pct = 20
+degraded_rtt_ms   = 500
+
+[mqtt]
+broker       = "tcp://127.0.0.1:1883"   # the Pi's local broker, bridged to garibaldi
+client_id    = "netmon-schoolhouse"
+topic_prefix = "sites"

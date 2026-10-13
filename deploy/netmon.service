@@ -1,0 +1,27 @@
+[Unit]
+Description=netmon: site network monitor, publishing to MQTT
+# The local broker it publishes to, and the tailnet it checks.
+After=network-online.target mosquitto.service tailscaled.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/netmon -config /etc/netmon/config.toml
+Restart=on-failure
+RestartSec=5
+# Well inside the 180 s the UPS allows between shutdown-cmd and cutting its
+# output (pi-setup/nut-shutdown).
+TimeoutStopSec=20s
+
+# No account to create: a transient user per run. Unprivileged ICMP works
+# because net.ipv4.ping_group_range covers every group (Debian's default).
+DynamicUser=yes
+StateDirectory=netmon
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+# tailscale status talks to tailscaled's socket ("-": fine if absent).
+ReadWritePaths=-/run/tailscale
+
+[Install]
+WantedBy=multi-user.target
