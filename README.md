@@ -161,14 +161,14 @@ First, once: `cp deploy/sites.example deploy/sites` and fill in your hosts.
 From this directory:
 
 ```
-deploy/deploy.sh --check               # read-only, no sudo: what would change
-deploy/deploy.sh                       # build, install, verify; asks first
-deploy/deploy.sh rollback              # stop and remove (config and state kept)
-deploy/deploy.sh --site home --check   # the same for another site
+deploy/deploy.sh --site schoolhouse --check      # read-only, no sudo: what would change
+deploy/deploy.sh --site schoolhouse              # build, install, verify; asks first
+deploy/deploy.sh --site schoolhouse rollback     # stop and remove (config and state kept)
+deploy/deploy.sh --site home --check             # the same for another site
 ```
 
-`--site` picks a row of `deploy/sites` and its `configs/<site>.toml`; the
-default is `schoolhouse`. Each row gives the site id, its ssh target, and its
+`--site` is required, so a deploy always names the host it changes. It picks
+a row of `deploy/sites` and its `configs/<site>.toml`. Each row gives the site id, its ssh target, and its
 hub: the main broker the site's bridge feeds, where the install is verified.
 `--host` and `--hub` override them. The binary is built for whatever `uname -m` the host reports (arm64
 or amd64).

@@ -3,13 +3,14 @@
 # directory and the site's config, and runs deploy/remote.sh there (under
 # sudo, which asks for your password).
 #
-#   deploy/deploy.sh [--site NAME] --check     what is installed, what would change (read-only, no sudo)
-#   deploy/deploy.sh [--site NAME]             install / upgrade; shows the plan and asks first
-#   deploy/deploy.sh [--site NAME] --yes       ... without asking
-#   deploy/deploy.sh [--site NAME] rollback [--check]   stop and remove netmon (config and state kept)
+#   deploy/deploy.sh --site NAME --check     what is installed, what would change (read-only, no sudo)
+#   deploy/deploy.sh --site NAME             install / upgrade; shows the plan and asks first
+#   deploy/deploy.sh --site NAME --yes       ... without asking
+#   deploy/deploy.sh --site NAME rollback [--check]   stop and remove netmon (config and state kept)
 #
-#   --site NAME        a site in deploy/sites, with its config in configs/NAME.toml
-#                      (default schoolhouse)
+#   --site NAME        required: a site in deploy/sites, with its config in
+#                      configs/NAME.toml. There is no default, so a deploy
+#                      always names the host it changes.
 #   --host USER@HOST   override the site's ssh target
 #   --hub HOST         override the site's hub (where the install is verified)
 #
@@ -20,14 +21,14 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
-SITE="schoolhouse" HOST="" HUB="" ARGS=() CHECK=0
+SITE="" HOST="" HUB="" ARGS=() CHECK=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --site) SITE="${2:?--site needs a name}"; shift ;;
     --host) HOST="${2:?--host needs USER@HOST}"; shift ;;
     --hub) HUB="${2:?--hub needs a host}"; shift ;;
     --check|--dry-run) CHECK=1; ARGS+=(--check) ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -35,6 +36,10 @@ done
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+if [ -z "$SITE" ]; then
+  sites="$(cd "$SRC/configs" && ls *.toml | sed 's/\.toml$//' | tr '\n' ' ')"
+  die "--site NAME is required (sites: ${sites% })"
+fi
 CONFIG="$SRC/configs/$SITE.toml"
 [ -f "$CONFIG" ] || die "no config for site '$SITE' (expected configs/$SITE.toml)"
 SITES="${NETMON_SITES:-$SRC/deploy/sites}"
