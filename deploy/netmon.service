@@ -8,8 +8,8 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/netmon -config /etc/netmon/config.toml
 Restart=on-failure
 RestartSec=5
-# Well inside the 180 s the UPS allows between shutdown-cmd and cutting its
-# output (pi-setup/nut-shutdown).
+# Bounds how long a shutdown or reboot waits for netmon (it normally stops
+# at once). pi-setup/nut-shutdown, if ever installed, relies on this.
 TimeoutStopSec=20s
 
 # No account to create: a transient user per run. Unprivileged ICMP works
