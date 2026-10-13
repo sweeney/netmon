@@ -114,27 +114,6 @@ func resolve4(ctx context.Context, host string) (net.IP, error) {
 	return ips[0], nil
 }
 
-// TCP connects to addr and closes at once: exactly what the MQTT bridge
-// needs to work, without speaking MQTT.
-func TCP(ctx context.Context, addr string, timeout time.Duration) Result {
-	res := Result{Target: addr}
-	if addr == "" {
-		res.Err = "no address configured"
-		return res
-	}
-	d := net.Dialer{Timeout: timeout}
-	start := time.Now()
-	c, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		res.Err = err.Error()
-		return res
-	}
-	c.Close() //nolint:errcheck
-	t := ms(time.Since(start))
-	res.OK, res.RTTms = true, &t
-	return res
-}
-
 // DNS looks name up through server directly, bypassing the host's resolver
 // (on the Pi that is Tailscale's MagicDNS, which can fail on its own).
 func DNS(ctx context.Context, server, name string, timeout time.Duration) Result {

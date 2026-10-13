@@ -68,8 +68,10 @@ func NewState(now time.Time, synced *bool, status, raw string, since *time.Time,
 			"gateway":  check(r.Gateway, false),
 			"internet": check(r.Internet, true),
 			"dns":      check(r.DNS, false),
-			"broker":   check(r.Broker, false),
 		},
+	}
+	if r.Bridge != nil {
+		s.Checks["bridge"] = check(*r.Bridge, false)
 	}
 	if since != nil {
 		u := since.UTC()

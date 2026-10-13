@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Runs ON THE PI. Normally invoked by deploy.sh, which builds netmon, copies
-# this tree over and runs it under sudo.
+# Runs ON THE TARGET HOST (a site's Pi, or the hub). Normally invoked by
+# deploy.sh, which builds netmon, copies this tree and the site's config over
+# (as config.toml.example) and runs it under sudo.
 #
-#   remote.sh [--check] [--yes] install    install / upgrade (default)
-#   remote.sh [--check] [--yes] rollback   stop and remove it (config and state kept)
+#   remote.sh [--check] [--yes] --hub HOST install   install / upgrade (default)
+#   remote.sh [--check] [--yes] rollback              stop and remove it (config and state kept)
 #
-# --check  report what is installed and what would change; changes nothing and
-#          needs no root.
-# --yes    skip the confirmation prompt.
+# --check     report what is installed and what would change; changes nothing
+#             and needs no root.
+# --yes       skip the confirmation prompt.
+# --hub HOST  the main broker, which the site's bridge feeds; an install is
+#             verified by reading the site's state there. Required to install
+#             (deploy.sh passes it from deploy/sites).
 #
-# The config is installed only if there is none: edits on the Pi survive
-# upgrades. Safe to re-run: a run with nothing to change restarts nothing.
+# The config is installed only if there is none, so edits on the host survive
+# upgrades. The exception is a config that is byte-for-byte one netmon shipped
+# earlier (deploy/shipped-configs.sha256): never edited, so it is replaced. Safe to re-run: a run with nothing to change restarts nothing.
 #
 # ROOT (env) prefixes every path, for the tests. Empty on the Pi.
 set -euo pipefail
@@ -20,21 +25,20 @@ CONFIRM_TTY="${CONFIRM_TTY:-/dev/tty}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PAYLOAD="$(cd "$HERE/.." && pwd)"
 
-GARIBALDI_IP="${GARIBALDI_IP:-100.64.0.20}"   # verification reads the bridged copy there
-
 BIN="$ROOT/usr/local/bin/netmon"
 CFG_DIR="$ROOT/etc/netmon"
 CFG="$CFG_DIR/config.toml"
 UNIT="$ROOT/etc/systemd/system/netmon.service"
 BACKUP_ROOT="$ROOT/var/backups/netmon"
 
-CHECK=0 YES=0 CMD=""
+CHECK=0 YES=0 CMD="" HUB=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check|--dry-run) CHECK=1 ;;
     --yes|-y) YES=1 ;;
+    --hub) HUB="${2:?--hub needs a host}"; shift ;;
     install|rollback) CMD="$1" ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -79,7 +83,7 @@ preflight() {
   local id; id="$(. "$ROOT/etc/os-release" && echo "$ID $VERSION_ID")"
   [ "$id" = "debian 13" ] || die "expected Debian 13, found: $id"
   info "OS: $id"
-  for f in netmon deploy/netmon.service config.toml.example; do
+  for f in netmon deploy/netmon.service deploy/shipped-configs.sha256 config.toml.example; do
     [ -f "$PAYLOAD/$f" ] || die "payload missing $f"
   done
   local v; v="$("$PAYLOAD/netmon" -version 2>/dev/null)" || die "the payload binary does not run here (wrong architecture?)"
@@ -90,8 +94,28 @@ preflight() {
   [ "$1" -le 0 ] && [ "$2" -ge 2147483647 ] \
     || die "net.ipv4.ping_group_range is '$range': unprivileged ping would fail for netmon's dynamic user"
   info "unprivileged ICMP allowed for every group"
-  systemctl is-active --quiet mosquitto || die "the local mosquitto is not running (pi-setup/mqtt-bridge installs it)"
+  systemctl is-active --quiet mosquitto || die "the local mosquitto is not running (on a site's Pi, pi-setup/mqtt-bridge installs it)"
   info "local mosquitto active"
+  # The config is kept across upgrades, so a payload for another site would
+  # never be installed, and the deploy would silently verify the wrong topic.
+  local want have; want="$(site_id "$PAYLOAD/config.toml.example")"
+  if [ -f "$CFG" ]; then
+    have="$(site_id "$CFG")"
+    [ "$have" = "$want" ] || die "this host runs netmon for site '$have', but this deploy is for site '$want' (wrong --site or --host?)"
+  fi
+  info "site: $want"
+  # A kept config must load with the new binary, or the upgrade fails after
+  # it has started; say so now, while nothing has changed.
+  if [ -f "$CFG" ] && ! config_is_stale && ! "$PAYLOAD/netmon" -config "$CFG" -check-config >/dev/null 2>"$PAYLOAD/cfg-err"; then
+    die "/etc/netmon/config.toml was edited on this host and does not load with netmon $v: $(cat "$PAYLOAD/cfg-err"). Fix it (compare configs/$want.toml in the repo) and re-run"
+  fi
+}
+
+# config_is_stale: the installed config is an unedited older shipped one.
+config_is_stale() {
+  [ -f "$CFG" ] && ! same_file "$PAYLOAD/config.toml.example" "$CFG" || return 1
+  local h; h="$(sha256sum "$CFG" | cut -d' ' -f1)"
+  grep -v '^#' "$PAYLOAD/deploy/shipped-configs.sha256" | cut -d' ' -f1 | grep -qx "$h"
 }
 
 PENDING=()
@@ -99,6 +123,7 @@ plan_install() {
   PENDING=()
   same_file "$PAYLOAD/netmon" "$BIN" || PENDING+=("install /usr/local/bin/netmon ($("$PAYLOAD/netmon" -version), now: $([ -x "$BIN" ] && "$BIN" -version 2>/dev/null || echo none))")
   [ -f "$CFG" ] || PENDING+=("install /etc/netmon/config.toml from config.toml.example (kept on later upgrades)")
+  config_is_stale && PENDING+=("replace /etc/netmon/config.toml: an unedited config from an older netmon (backed up)")
   same_file "$PAYLOAD/deploy/netmon.service" "$UNIT" || PENDING+=("install /etc/systemd/system/netmon.service")
   if [ "$(systemctl is-enabled netmon 2>/dev/null)" != enabled ] || ! systemctl is-active --quiet netmon || [ ${#PENDING[@]} -gt 0 ]; then
     PENDING+=("enable + (re)start netmon")
@@ -118,14 +143,15 @@ verify() {  # $1: config in force
   journalctl -u netmon --since "@$STARTED_AT" --no-pager 2>/dev/null | grep -q "connected to MQTT broker" \
     || { echo "    netmon has not logged 'connected to MQTT broker' since its start"; return 1; }
   info "netmon connected to the local broker"
-  got="$(mosquitto_sub -h "$GARIBALDI_IP" -t "$topic" -R -C 1 -W 30 2>/dev/null || true)"
-  [ -n "$got" ] || { echo "    no live $topic on garibaldi within 30 s"; return 1; }
-  case "$got" in *'"online":true'*) ;; *) echo "    $topic on garibaldi is not online: $got"; return 1 ;; esac
-  info "garibaldi received a live $topic via the bridge: status $(grep -o '"status":"[^"]*"' <<<"$got" | head -1 | cut -d'"' -f4)"
+  got="$(mosquitto_sub -h "$HUB" -t "$topic" -R -C 1 -W 30 2>/dev/null || true)"
+  [ -n "$got" ] || { echo "    no live $topic on the hub ($HUB) within 30 s"; return 1; }
+  case "$got" in *'"online":true'*) ;; *) echo "    $topic on the hub ($HUB) is not online: $got"; return 1 ;; esac
+  info "the hub ($HUB) has a live $topic: status $(grep -o '"status":"[^"]*"' <<<"$got" | head -1 | cut -d'"' -f4)"
 }
 
 restore() {
   echo "!!> verification failed; restoring the previous netmon" >&2
+  if [ -n "$BACKUP" ] && [ -f "$BACKUP/etc/netmon/config.toml" ]; then cp -p "$BACKUP/etc/netmon/config.toml" "$CFG"; fi
   if [ -n "$BACKUP" ] && [ -f "$BACKUP/usr/local/bin/netmon" ]; then cp -p "$BACKUP/usr/local/bin/netmon" "$BIN"; fi
   if [ -n "$BACKUP" ] && [ -f "$BACKUP/etc/systemd/system/netmon.service" ]; then
     cp -p "$BACKUP/etc/systemd/system/netmon.service" "$UNIT"
@@ -140,6 +166,7 @@ restore() {
 }
 
 do_install() {
+  [ "$CHECK" = 1 ] || [ -n "$HUB" ] || die "install needs --hub HOST, the main broker to verify against (deploy.sh passes it from deploy/sites)"
   [ "$CHECK" = 1 ] || need_root
   preflight
   plan_install
@@ -149,13 +176,15 @@ do_install() {
   if [ "$CHECK" = 1 ]; then echo "(--check: nothing changed)"; return 0; fi
   confirm "Apply these changes on $(hostname)?"
 
-  backup "$BIN" "$UNIT"
+  backup "$BIN" "$UNIT" "$CFG"
   say "installing"
   if ! same_file "$PAYLOAD/netmon" "$BIN"; then
     install -m 755 "$PAYLOAD/netmon" "$BIN.netmon-new"; mv -f "$BIN.netmon-new" "$BIN"; info "installed /usr/local/bin/netmon"
   fi
   if [ ! -f "$CFG" ]; then
     mkdir -p "$CFG_DIR"; install -m 644 "$PAYLOAD/config.toml.example" "$CFG"; info "installed /etc/netmon/config.toml"
+  elif config_is_stale; then
+    install -m 644 "$PAYLOAD/config.toml.example" "$CFG"; info "replaced /etc/netmon/config.toml (the old one is in the backup)"
   fi
   if ! same_file "$PAYLOAD/deploy/netmon.service" "$UNIT"; then
     install -m 644 "$PAYLOAD/deploy/netmon.service" "$UNIT"; info "installed netmon.service"

@@ -17,25 +17,39 @@ func write(t *testing.T, body string) string {
 	return p
 }
 
-func TestExampleLoads(t *testing.T) {
+func TestSiteConfigsLoad(t *testing.T) {
 	t.Setenv("STATE_DIRECTORY", "")
-	cfg, err := Load("../../config.toml.example")
+	cfg, err := Load("../../configs/schoolhouse.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Site.ID != "schoolhouse" || cfg.Probe.Interval != 10*time.Second || cfg.Probe.BrokerAddr != "100.64.0.20:1883" ||
-		cfg.MQTT.ClientID != "netmon-schoolhouse" || cfg.StateDir != "/var/lib/netmon" ||
+	if cfg.Site.ID != "schoolhouse" || cfg.Probe.Interval != 10*time.Second || cfg.Probe.BridgeTopic != "sites/schoolhouse/bridge" ||
+		cfg.Probe.TailscalePeer != "garibaldi" || cfg.MQTT.ClientID != "netmon-schoolhouse" || cfg.StateDir != "/var/lib/netmon" ||
 		cfg.Probe.PiHelperEnv != "/run/pi-helper.env" {
-		t.Errorf("got %+v", cfg)
+		t.Errorf("schoolhouse: got %+v", cfg)
 	}
 	if got := cfg.Topic("last_outage"); got != "sites/schoolhouse/network/last_outage" {
+		t.Errorf("topic %q", got)
+	}
+
+	// garibaldi is the hub: no bridge of its own to watch, and no pi-helper.
+	cfg, err = Load("../../configs/home.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Site.ID != "home" || cfg.Probe.BridgeTopic != "" || cfg.Probe.TailscalePeer != "pi3b-schoolhouse" ||
+		cfg.Probe.PiHelperEnv != "" || cfg.MQTT.Broker != "tcp://127.0.0.1:1883" || cfg.MQTT.ClientID != "netmon-home" ||
+		cfg.StateDir != "/var/lib/netmon" {
+		t.Errorf("home: got %+v", cfg)
+	}
+	if got := cfg.Topic("state"); got != "sites/home/network/state" {
 		t.Errorf("topic %q", got)
 	}
 }
 
 func TestDefaultsAndDerivedClientID(t *testing.T) {
 	t.Setenv("STATE_DIRECTORY", "/var/lib/netmon")
-	cfg, err := Load(write(t, "[site]\nid = \"home\"\n[probe]\nbroker_addr = \"10.0.0.2:1883\"\n"))
+	cfg, err := Load(write(t, "[site]\nid = \"home\"\n[probe]\nbridge_topic = \"sites/home/bridge\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,12 +62,12 @@ func TestEnvOverrides(t *testing.T) {
 	t.Setenv("NETMON_SITE_ID", "office")
 	t.Setenv("NETMON_INTERVAL", "15s")
 	t.Setenv("NETMON_INTERNET", "1.1.1.1, 8.8.4.4")
-	t.Setenv("NETMON_BROKER_ADDR", "10.0.0.9:1883")
+	t.Setenv("NETMON_BRIDGE_TOPIC", "sites/office/bridge")
 	cfg, err := Load(write(t, "[site]\nid = \"home\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Site.ID != "office" || cfg.Probe.Interval != 15*time.Second || strings.Join(cfg.Probe.Internet, ",") != "1.1.1.1,8.8.4.4" || cfg.Probe.BrokerAddr != "10.0.0.9:1883" {
+	if cfg.Site.ID != "office" || cfg.Probe.Interval != 15*time.Second || strings.Join(cfg.Probe.Internet, ",") != "1.1.1.1,8.8.4.4" || cfg.Probe.BridgeTopic != "sites/office/bridge" {
 		t.Errorf("got %+v", cfg)
 	}
 	t.Setenv("NETMON_INTERVAL", "soon")
@@ -63,12 +77,12 @@ func TestEnvOverrides(t *testing.T) {
 }
 
 func TestRejects(t *testing.T) {
-	base := "[site]\nid = \"home\"\n[probe]\nbroker_addr = \"10.0.0.2:1883\"\n"
+	base := "[site]\nid = \"home\"\n[probe]\nbridge_topic = \"sites/home/bridge\"\n"
 	cases := map[string]string{
 		"unknown key":      base + "bogus = 1\n",
-		"no site":          "[probe]\nbroker_addr = \"x:1\"\n",
+		"no site":          "[probe]\nbridge_topic = \"x\"\n",
 		"bad site":         strings.Replace(base, "\"home\"", "\"a/b\"", 1),
-		"no broker addr":   "[site]\nid = \"home\"\n",
+		"wildcard bridge":  strings.Replace(base, "sites/home/bridge", "sites/+/bridge", 1),
 		"rounds too long":  base + "count = 10\ntimeout = \"2s\"\n",
 		"zero down_after":  base + "down_after = 0\n",
 		"no internet":      base + "internet = []\n",

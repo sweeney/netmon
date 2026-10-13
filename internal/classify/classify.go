@@ -13,12 +13,12 @@ import (
 type Status string
 
 const (
-	Unknown     Status = ""             // not enough rounds yet to say
-	OK          Status = "ok"           // every check passed
-	Degraded    Status = "degraded"     // every check passed, but loss or latency is high
-	TailnetDown Status = "tailnet_down" // internet up, broker unreachable
-	WANDown     Status = "wan_down"     // gateway up, internet unreachable
-	LANDown     Status = "lan_down"     // gateway unreachable
+	Unknown    Status = ""            // not enough rounds yet to say
+	OK         Status = "ok"          // every check passed
+	Degraded   Status = "degraded"    // every check passed, but loss or latency is high
+	BridgeDown Status = "bridge_down" // internet up, the site's MQTT bridge down
+	WANDown    Status = "wan_down"    // gateway up, internet unreachable
+	LANDown    Status = "lan_down"    // gateway unreachable
 )
 
 // severity orders statuses from best to worst.
@@ -28,7 +28,7 @@ func (s Status) severity() int {
 		return 1
 	case Degraded:
 		return 2
-	case TailnetDown:
+	case BridgeDown:
 		return 3
 	case WANDown:
 		return 4
@@ -39,8 +39,8 @@ func (s Status) severity() int {
 }
 
 // IsOutage reports whether s is an outage: something on the path to the
-// broker is down. Degraded is shown live but is not an outage.
-func (s Status) IsOutage() bool { return s.severity() >= TailnetDown.severity() }
+// main broker is down. Degraded is shown live but is not an outage.
+func (s Status) IsOutage() bool { return s.severity() >= BridgeDown.severity() }
 
 // Worse reports whether s is worse than t.
 func (s Status) Worse(t Status) bool { return s.severity() > t.severity() }
@@ -59,10 +59,10 @@ func Raw(r probe.Round, t Thresholds) Status {
 		return LANDown
 	case !r.Internet.OK:
 		return WANDown
-	case !r.Broker.OK:
-		return TailnetDown
+	case r.Bridge != nil && !r.Bridge.OK:
+		return BridgeDown
 	}
-	for _, c := range []probe.Result{r.Gateway, r.Internet, r.DNS, r.Broker} {
+	for _, c := range []probe.Result{r.Gateway, r.Internet, r.DNS} {
 		if c.LossPct != nil && t.LossPct > 0 && *c.LossPct > t.LossPct {
 			return Degraded
 		}

@@ -143,14 +143,14 @@ func TestPendingSurvivesRestartIntoAnOutage(t *testing.T) {
 	c, st := newClock(), &MemoryStore{}
 	tr := NewTracker(c, st)
 	tr.Restore("ok", false)
-	tr.Observe("tailnet_down", true)
+	tr.Observe("bridge_down", true)
 	c.Advance(time.Minute)
 	tr.Observe("ok", false) // ended, never published
 	tr2, _ := restart(c, st, false)
 	tr2.Restore("wan_down", true) // the restart lands in a new outage
 	tr2.Observe("wan_down", true)
 	s := mustDue(t, tr2)
-	if s.WorstStatus != "tailnet_down" || s.Duration() != time.Minute {
+	if s.WorstStatus != "bridge_down" || s.Duration() != time.Minute {
 		t.Errorf("summary: %+v", s)
 	}
 	if _, open := tr2.Current(); !open {
@@ -331,14 +331,14 @@ func TestEndedButUnpublishedSurvivesRestart(t *testing.T) {
 	c, st := newClock(), &MemoryStore{}
 	tr := NewTracker(c, st)
 	tr.Restore("ok", false)
-	tr.Observe("tailnet_down", true)
+	tr.Observe("bridge_down", true)
 	c.Advance(time.Minute)
 	tr.Observe("ok", false)
 
 	tr2, _ := restart(c, st, false)
 	tr2.Restore("ok", false)
 	s := mustDue(t, tr2)
-	if s.Duration() != time.Minute || s.WorstStatus != "tailnet_down" || s.SpansRestart {
+	if s.Duration() != time.Minute || s.WorstStatus != "bridge_down" || s.SpansRestart {
 		t.Errorf("summary: %+v", s)
 	}
 }

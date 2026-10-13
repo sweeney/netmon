@@ -10,9 +10,10 @@ func f(v float64) *float64 { return &v }
 
 func up() probe.Result { return probe.Result{OK: true, RTTms: f(10), LossPct: f(0)} }
 
-func round(gw, inet, dns, broker bool) probe.Round {
-	r := probe.Round{Gateway: up(), Internet: up(), DNS: up(), Broker: up()}
-	r.Gateway.OK, r.Internet.OK, r.DNS.OK, r.Broker.OK = gw, inet, dns, broker
+func round(gw, inet, dns, bridge bool) probe.Round {
+	b := probe.Result{OK: bridge, Target: "sites/x/bridge"}
+	r := probe.Round{Gateway: up(), Internet: up(), DNS: up(), Bridge: &b}
+	r.Gateway.OK, r.Internet.OK, r.DNS.OK = gw, inet, dns
 	return r
 }
 
@@ -27,7 +28,9 @@ func TestRawOrder(t *testing.T) {
 		{"gateway down explains everything", round(false, false, false, false), LANDown},
 		{"gateway down alone", round(false, true, true, true), LANDown},
 		{"internet down", round(true, false, false, false), WANDown},
-		{"broker down", round(true, true, true, false), TailnetDown},
+		{"bridge down", round(true, true, true, false), BridgeDown},
+		{"bridge down, dns down too", round(true, true, false, false), BridgeDown},
+		{"no bridge watched (the hub)", func() probe.Round { r := round(true, true, true, true); r.Bridge = nil; return r }(), OK},
 		{"dns down only", round(true, true, false, true), Degraded},
 	}
 	for _, c := range cases {
@@ -45,7 +48,7 @@ func TestRawDegraded(t *testing.T) {
 		t.Errorf("loss: got %s", got)
 	}
 	r = round(true, true, true, true)
-	r.Broker.RTTms = f(800)
+	r.DNS.RTTms = f(800)
 	if got := Raw(r, th); got != Degraded {
 		t.Errorf("rtt: got %s", got)
 	}
@@ -60,7 +63,7 @@ func TestRawDegraded(t *testing.T) {
 }
 
 func TestIsOutage(t *testing.T) {
-	for s, want := range map[Status]bool{OK: false, Degraded: false, Unknown: false, TailnetDown: true, WANDown: true, LANDown: true} {
+	for s, want := range map[Status]bool{OK: false, Degraded: false, Unknown: false, BridgeDown: true, WANDown: true, LANDown: true} {
 		if s.IsOutage() != want {
 			t.Errorf("%q.IsOutage() = %v", s, !want)
 		}
@@ -87,7 +90,7 @@ func TestHysteresis(t *testing.T) {
 			{LANDown, WANDown, false}, {LANDown, WANDown, false}, {LANDown, LANDown, true}}},
 		{"easing within an outage needs up_after", []step{
 			{LANDown, Unknown, false}, {LANDown, Unknown, false}, {LANDown, LANDown, true},
-			{TailnetDown, LANDown, false}, {TailnetDown, TailnetDown, true}}},
+			{BridgeDown, LANDown, false}, {BridgeDown, BridgeDown, true}}},
 		{"a run interrupted by the current status starts again", []step{
 			{OK, Unknown, false}, {OK, OK, true},
 			{WANDown, OK, false}, {WANDown, OK, false}, {OK, OK, false}, {WANDown, OK, false}, {WANDown, OK, false}, {WANDown, WANDown, true}}},

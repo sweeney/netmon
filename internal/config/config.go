@@ -36,7 +36,7 @@ type ProbeConfig struct {
 	Internet        []string      `toml:"internet"`
 	DNSServer       string        `toml:"dns_server"`
 	DNSName         string        `toml:"dns_name"`
-	BrokerAddr      string        `toml:"broker_addr"`
+	BridgeTopic     string        `toml:"bridge_topic"` // the site bridge's notification topic; empty: no bridge check
 	TailscalePeer   string        `toml:"tailscale_peer"`
 	PiHelperEnv     string        `toml:"pi_helper_env"` // empty: don't read it
 	DegradedLossPct float64       `toml:"degraded_loss_pct"`
@@ -105,7 +105,7 @@ func applyEnv(cfg *Config, get func(string) string) error {
 		"NETMON_MQTT_CLIENT_ID": &cfg.MQTT.ClientID,
 		"NETMON_MQTT_USERNAME":  &cfg.MQTT.Username,
 		"NETMON_MQTT_PASSWORD":  &cfg.MQTT.Password,
-		"NETMON_BROKER_ADDR":    &cfg.Probe.BrokerAddr,
+		"NETMON_BRIDGE_TOPIC":   &cfg.Probe.BridgeTopic,
 		"NETMON_TAILSCALE_PEER": &cfg.Probe.TailscalePeer,
 		"NETMON_STATE_DIR":      &cfg.StateDir,
 	}
@@ -154,8 +154,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("probe.count × probe.timeout (%d × %s) must fit inside probe.interval (%s)", p.Count, p.Timeout, p.Interval)
 	case len(p.Internet) == 0:
 		return fmt.Errorf("probe.internet needs at least one host")
-	case p.BrokerAddr == "":
-		return fmt.Errorf("probe.broker_addr is required (host:port of the MQTT broker the bridge uses)")
+	case strings.ContainsAny(p.BridgeTopic, "#+"):
+		return fmt.Errorf("probe.bridge_topic %q must be a plain topic, not a wildcard", p.BridgeTopic)
 	case c.MQTT.Broker == "":
 		return fmt.Errorf("mqtt.broker is required")
 	case c.MQTT.TopicPrefix == "":

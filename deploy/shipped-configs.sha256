@@ -1,0 +1,12 @@
+# sha256 of every config netmon has shipped (configs/<site>.toml, and
+# config.toml.example before it). An installed config matching one of these
+# was never edited on the host, so an upgrade may replace it with the
+# current one. Add the old hash here whenever a shipped config changes.
+#
+# As deployed to hosts. These copies held the hosts' tailnet addresses,
+# which the public history replaces, so they hash differently from it.
+068ec3590f3ba92434af6a3c169e0c8eaaa216365c95d53e4e7a32d51f16e802  config.toml.example, as shipped from ac3cd9d
+6d339360e946b27ed4351ba01637b912f3800e263acaf1634d87eac4d7b40a42  config.toml.example, as shipped from d8c217e
+# As in the history.
+7419d827cbb62ed45c30ce5bea09d0df6743ce0e0979fc269045154dbdc8c47f  config.toml.example @ ac3cd9d
+860cdc4c1ae030a977cdd349ed1f280c1dc0877ff5ae9c4656aba194443d6696  config.toml.example @ d8c217e

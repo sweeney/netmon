@@ -31,6 +31,11 @@ func (s *script) Round(context.Context) probe.Round {
 
 func f(v float64) *float64 { return &v }
 
+func bridge(ok bool) *probe.Result {
+	r := probe.Result{OK: ok, Target: "sites/schoolhouse/bridge"}
+	return &r
+}
+
 func res(ok bool) probe.Result {
 	if ok {
 		return probe.Result{OK: true, RTTms: f(5), LossPct: f(0)}
@@ -39,9 +44,9 @@ func res(ok bool) probe.Result {
 }
 
 var (
-	allOK  = probe.Round{Gateway: res(true), Internet: res(true), DNS: res(true), Broker: res(true)}
-	wan    = probe.Round{Gateway: res(true), Internet: res(false), DNS: res(false), Broker: res(false)}
-	lan    = probe.Round{Gateway: res(false), Internet: res(false), DNS: res(false), Broker: res(false)}
+	allOK  = probe.Round{Gateway: res(true), Internet: res(true), DNS: res(true), Bridge: bridge(true)}
+	wan    = probe.Round{Gateway: res(true), Internet: res(false), DNS: res(false), Bridge: bridge(false)}
+	lan    = probe.Round{Gateway: res(false), Internet: res(false), DNS: res(false), Bridge: bridge(false)}
 	t0     = time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC)
 	topicS = "sites/schoolhouse/network/state"
 	topicO = "sites/schoolhouse/network/outage"
@@ -61,7 +66,7 @@ func rounds(parts ...any) []probe.Round {
 func testCfg() config.Config {
 	cfg := config.Defaults()
 	cfg.Site.ID = "schoolhouse"
-	cfg.Probe.BrokerAddr = "100.64.0.20:1883"
+	cfg.Probe.BridgeTopic = "sites/schoolhouse/bridge"
 	return cfg
 }
 
@@ -275,7 +280,7 @@ func TestStatePayloadShape(t *testing.T) {
 		t.Error("status_since before any status settled")
 	}
 	checks := v["checks"].(map[string]any)
-	for _, k := range []string{"gateway", "internet", "dns", "broker"} {
+	for _, k := range []string{"gateway", "internet", "dns", "bridge"} {
 		if _, ok := checks[k]; !ok {
 			t.Errorf("missing check %s", k)
 		}

@@ -32,7 +32,7 @@ func TestParseRoute(t *testing.T) {
 	}
 }
 
-// Trimmed from `tailscale status --json` on the Pi.
+// Trimmed from `tailscale status --json` on the Pi (addresses anonymised).
 const tsJSON = `{"BackendState":"Running","Peer":{
  "nodekey:a":{"HostName":"garibaldi","DNSName":"garibaldi.example-tailnet.ts.net.","CurAddr":"203.0.113.10:51826","Relay":"lhr","Online":true,"LastHandshake":"2026-10-13T21:36:00.837994522+01:00"},
  "nodekey:b":{"HostName":"office","DNSName":"office-1.example-tailnet.ts.net.","CurAddr":"","Relay":"lhr","Online":true,"LastHandshake":"0001-01-01T00:00:00Z"}}}`
@@ -108,33 +108,6 @@ func TestPingResult(t *testing.T) {
 	}
 }
 
-func TestTCP(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	go func() {
-		for {
-			c, err := l.Accept()
-			if err != nil {
-				return
-			}
-			c.Close()
-		}
-	}()
-	if r := TCP(context.Background(), addr, time.Second); !r.OK || r.RTTms == nil {
-		t.Errorf("listening: %+v", r)
-	}
-	l.Close()
-	if r := TCP(context.Background(), addr, time.Second); r.OK || r.Err == "" {
-		t.Errorf("closed: %+v", r)
-	}
-	if r := TCP(context.Background(), "", time.Second); r.OK {
-		t.Error("empty address passed")
-	}
-}
-
 func TestDNSFailsFast(t *testing.T) {
 	// Nothing answers DNS on this port.
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -164,7 +137,7 @@ func TestPingLoopback(t *testing.T) {
 
 func TestRoundUsesHooks(t *testing.T) {
 	s := &System{
-		Cfg: Config{Internet: []string{"i1"}, BrokerAddr: "", TailscalePeer: "garibaldi", Count: 1, Timeout: 100 * time.Millisecond},
+		Cfg: Config{Internet: []string{"i1"}, TailscalePeer: "garibaldi", Count: 1, Timeout: 100 * time.Millisecond},
 		Ping: fakePing(map[string]PingStats{
 			"10.0.0.1": {Sent: 1, Received: 1, RTTs: []float64{1}},
 			"i1":       {Sent: 1, Received: 1, RTTs: []float64{20}},
@@ -173,7 +146,7 @@ func TestRoundUsesHooks(t *testing.T) {
 		TailscaleF: func(context.Context, string) (*Tailscale, error) { return &Tailscale{Path: "direct"}, nil },
 	}
 	r := s.Round(context.Background())
-	if !r.Gateway.OK || r.Gateway.Target != "10.0.0.1" || !r.Internet.OK || r.Broker.OK || r.Tailscale == nil {
+	if !r.Gateway.OK || r.Gateway.Target != "10.0.0.1" || !r.Internet.OK || r.Bridge != nil || r.Tailscale == nil {
 		t.Errorf("got %+v", r)
 	}
 }

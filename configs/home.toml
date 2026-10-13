@@ -1,0 +1,30 @@
+# netmon: garibaldi, the home site's server and main MQTT broker.
+# deploy.sh --site home installs it as /etc/netmon/config.toml.
+
+state_dir = "/var/lib/netmon"   # systemd's StateDirectory; outage state across restarts
+
+[site]
+id = "home"                     # as in the swee.net "sites" config; topics are sites/<id>/network/...
+
+[probe]
+interval    = "10s"
+down_after  = 3                 # rounds failing before the status gets worse (~30 s)
+up_after    = 2                 # rounds passing before it gets better
+count       = 3                 # ICMP echoes per host per round
+timeout     = "1s"              # per echo / connect / lookup
+# gateway   = "192.168.1.1"     # default: the default route's gateway, read each round
+internet    = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]   # down only if all fail
+dns_server  = "1.1.1.1:53"      # bypasses MagicDNS
+dns_name    = "example.com"
+# garibaldi is the hub: it has no bridge of its own, so no bridge_topic. Its
+# status is home's own network only; the schoolhouse's link is
+# sites/schoolhouse/bridge, which consumers read directly.
+tailscale_peer = "pi3b-schoolhouse"   # its path is reported, not judged
+pi_helper_env  = ""             # pi-helper does not run on garibaldi
+degraded_loss_pct = 20
+degraded_rtt_ms   = 500
+
+[mqtt]
+broker       = "tcp://127.0.0.1:1883"   # garibaldi's own mosquitto
+client_id    = "netmon-home"
+topic_prefix = "sites"

@@ -3,7 +3,7 @@
 // it is over (which the Pi's bridge queues and delivers on reconnect).
 //
 //	netmon -config /etc/netmon/config.toml
-//	netmon -config config.toml -once          one round, printed; no MQTT
+//	netmon -config config.toml -once          one round, printed; publishes nothing
 //	netmon -config config.toml -check-config  validate the config
 package main
 
@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 
 	"github.com/sweeney/netmon/internal/classify"
 	"github.com/sweeney/netmon/internal/config"
@@ -55,10 +57,13 @@ func main() {
 	pr := &probe.System{Cfg: probe.Config{
 		Gateway: cfg.Probe.Gateway, Internet: cfg.Probe.Internet,
 		DNSServer: cfg.Probe.DNSServer, DNSName: cfg.Probe.DNSName,
-		BrokerAddr: cfg.Probe.BrokerAddr, TailscalePeer: cfg.Probe.TailscalePeer,
-		PiHelperEnv: cfg.Probe.PiHelperEnv,
-		Count:       cfg.Probe.Count, Timeout: cfg.Probe.Timeout,
+		TailscalePeer: cfg.Probe.TailscalePeer,
+		PiHelperEnv:   cfg.Probe.PiHelperEnv,
+		Count:         cfg.Probe.Count, Timeout: cfg.Probe.Timeout,
 	}}
+	if cfg.Probe.BridgeTopic != "" {
+		pr.Bridge = &probe.BridgeWatch{Topic: cfg.Probe.BridgeTopic}
+	}
 	clock := outages.NewSystemClock()
 
 	if *once {
@@ -79,6 +84,9 @@ func main() {
 	}, cfg.Topic("state"), daemon.WillPayload())
 	if err != nil {
 		log.Fatalf("configuring MQTT: %v", err)
+	}
+	if b := pr.Bridge; b != nil {
+		pub.Watch(b.Topic, b.Set, b.Forget)
 	}
 	// The local broker may still be starting at boot; retry rather than exit
 	// and lean on systemd's restart, whose rate limit gives up for good.
@@ -117,10 +125,16 @@ func run(ctx context.Context, d *daemon.Daemon, pub *publisher.MQTTPublisher, in
 }
 
 // runOnce probes once and prints the state payload: a dry run for checking
-// the probes on a new host without touching MQTT.
-func runOnce(cfg config.Config, pr probe.Prober, clock outages.Clock) int {
+// the probes on a new host. It publishes nothing; with a bridge topic it
+// reads the bridge's retained status from the broker first.
+func runOnce(cfg config.Config, pr *probe.System, clock outages.Clock) int {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Probe.Interval)
 	defer cancel()
+	if pr.Bridge != nil {
+		if err := readRetained(cfg, pr.Bridge.Topic, 3*time.Second, pr.Bridge.Set); err != nil {
+			log.Printf("reading %s: %v", pr.Bridge.Topic, err)
+		}
+	}
 	r := pr.Round(ctx)
 	raw := classify.Raw(r, classify.Thresholds{LossPct: cfg.Probe.DegradedLossPct, RTTms: cfg.Probe.DegradedRTTms})
 	var synced *bool
@@ -139,4 +153,34 @@ func store(cfg config.Config) outages.Store {
 		return outages.NopStore{}
 	}
 	return &outages.FileStore{Path: filepath.Join(cfg.StateDir, outages.StateFileName)}
+}
+
+// readRetained connects once, without a will and under its own client id (so
+// the running service is not disturbed), and passes the topic's retained
+// message to set, waiting up to timeout for it.
+func readRetained(cfg config.Config, topic string, timeout time.Duration, set func(string)) error {
+	opts := mqtt.NewClientOptions().AddBroker(cfg.MQTT.Broker).
+		SetClientID(cfg.MQTT.ClientID + "-once").SetConnectTimeout(timeout).SetAutoReconnect(false)
+	if cfg.MQTT.Username != "" {
+		opts.SetUsername(cfg.MQTT.Username).SetPassword(cfg.MQTT.Password)
+	}
+	c := mqtt.NewClient(opts)
+	if tok := c.Connect(); !tok.WaitTimeout(timeout) || tok.Error() != nil {
+		return fmt.Errorf("connecting to %s: %v", cfg.MQTT.Broker, tok.Error())
+	}
+	defer c.Disconnect(100)
+	got := make(chan struct{}, 1)
+	c.Subscribe(topic, 1, func(_ mqtt.Client, m mqtt.Message) {
+		set(string(m.Payload()))
+		select {
+		case got <- struct{}{}:
+		default:
+		}
+	})
+	select {
+	case <-got:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("no retained message within %s", timeout)
+	}
 }

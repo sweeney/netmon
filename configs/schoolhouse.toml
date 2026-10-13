@@ -1,4 +1,4 @@
-# netmon — pi3b-schoolhouse. Copy to /etc/netmon/config.toml.
+# netmon: pi3b-schoolhouse. deploy.sh --site schoolhouse installs it as /etc/netmon/config.toml.
 
 state_dir = "/var/lib/netmon"   # systemd's StateDirectory; outage state across restarts
 
@@ -15,7 +15,9 @@ timeout     = "1s"              # per echo / connect / lookup
 internet    = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]   # down only if all fail
 dns_server  = "1.1.1.1:53"      # bypasses MagicDNS
 dns_name    = "example.com"
-broker_addr = "100.64.0.20:1883"   # garibaldi, as the bridge reaches it
+# The bridge's retained status on the local broker ("1"/"0"), read over
+# netmon's own connection: no extra connections, nothing in any broker's log.
+bridge_topic = "sites/schoolhouse/bridge"
 tailscale_peer = "garibaldi"
 pi_helper_env  = "/run/pi-helper.env"   # link type/IP/wifi, reported only; "" to skip
 degraded_loss_pct = 20

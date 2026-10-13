@@ -1,3 +1,4 @@
 /netmon
 *.test
 *.out
+/deploy/sites

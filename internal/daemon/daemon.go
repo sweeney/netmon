@@ -184,7 +184,10 @@ func WillPayload() string { return string(payload.JSON(payload.Offline{Online: f
 
 func describe(r probe.Round) string {
 	s := "gateway " + okStr(r.Gateway.OK) + ", internet " + okStr(r.Internet.OK) +
-		", dns " + okStr(r.DNS.OK) + ", broker " + okStr(r.Broker.OK)
+		", dns " + okStr(r.DNS.OK)
+	if r.Bridge != nil {
+		s += ", bridge " + okStr(r.Bridge.OK)
+	}
 	return s
 }
 

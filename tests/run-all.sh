@@ -10,4 +10,5 @@ for f in deploy/*.sh tests/*.sh; do bash -n "$f"; done && echo "syntax: ok"
 go vet ./...
 echo "### go test -race"; go test -race -count=1 ./... 2>&1 | grep -v 'no test files'
 echo "### remote-script.sh"; tests/remote-script.sh
+echo "### deploy-script.sh"; tests/deploy-script.sh
 echo "### smoke.sh"; tests/smoke.sh

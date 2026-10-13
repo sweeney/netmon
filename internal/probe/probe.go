@@ -1,6 +1,6 @@
 // Package probe runs the network checks: the default gateway, several
-// internet hosts, a DNS lookup outside the tailnet, a TCP connect to the MQTT
-// broker, and Tailscale's own view of its path to the broker's host.
+// internet hosts, a DNS lookup outside the tailnet, the status of the site's
+// MQTT bridge, and Tailscale's own view of its path to a peer.
 package probe
 
 import (
@@ -18,7 +18,7 @@ type Result struct {
 	// Targets and TargetsOK count hosts, for a check with several.
 	Targets   int
 	TargetsOK int
-	RTTms     *float64 // median round trip (ICMP, DNS) or connect time (TCP)
+	RTTms     *float64 // median round trip (ICMP, DNS)
 	LossPct   *float64 // ICMP only
 	Err       string   // why it failed, when it did
 }
@@ -37,7 +37,7 @@ type Round struct {
 	Gateway   Result
 	Internet  Result
 	DNS       Result
-	Broker    Result
+	Bridge    *Result    // nil when no bridge is watched (the host is the hub)
 	Tailscale *Tailscale // nil when unavailable
 	Link      *Link      // nil when pi-helper's file is absent or unreadable
 }
@@ -48,8 +48,7 @@ type Config struct {
 	Internet      []string
 	DNSServer     string // host:port
 	DNSName       string
-	BrokerAddr    string // host:port
-	TailscalePeer string // host name of the broker's host; empty: skip
+	TailscalePeer string // a peer whose path to report; empty: skip
 	PiHelperEnv   string // pi-helper's env file; empty: skip
 	Count         int    // ICMP echoes per host per round
 	Timeout       time.Duration
@@ -68,6 +67,8 @@ type System struct {
 	GatewayFn  func() (string, error)
 	TailscaleF func(ctx context.Context, peer string) (*Tailscale, error)
 	LinkFn     func(path string) (*Link, error)
+	// Bridge supplies the bridge check; nil: none.
+	Bridge *BridgeWatch
 }
 
 // Round implements Prober. The checks run in parallel; a round takes about
@@ -121,7 +122,6 @@ func (s *System) Round(ctx context.Context) Round {
 	go func() {
 		defer wg.Done()
 		r.DNS = DNS(ctx, s.Cfg.DNSServer, s.Cfg.DNSName, timeout)
-		r.Broker = TCP(ctx, s.Cfg.BrokerAddr, timeout)
 	}()
 	go func() {
 		defer wg.Done()
@@ -133,6 +133,10 @@ func (s *System) Round(ctx context.Context) Round {
 		}
 	}()
 	wg.Wait()
+	if s.Bridge != nil {
+		b := s.Bridge.Result()
+		r.Bridge = &b
+	}
 	if s.Cfg.PiHelperEnv != "" {
 		if l, err := linkFn(s.Cfg.PiHelperEnv); err == nil {
 			r.Link = l

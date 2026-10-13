@@ -1,0 +1,11 @@
+# Sites deploy.sh knows. Copy to deploy/sites (gitignored) and fill in your
+# own hosts; the addresses stay out of the repo.
+#
+#   site      configs/<site>.toml
+#   ssh       the host to deploy to
+#   hub       the main broker, which the site's bridge feeds; remote.sh
+#             verifies an install by reading the site's state there
+#
+# site        ssh                        hub
+schoolhouse   pi@100.64.0.10             100.64.0.20    # a site's Pi
+home          admin@100.64.0.20          127.0.0.1      # the hub itself

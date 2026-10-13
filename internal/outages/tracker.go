@@ -2,7 +2,7 @@
 // process restarts and reboots, and reports it once it is over.
 //
 // An outage is a period in which the smoothed status is lan_down, wan_down or
-// tailnet_down. It can change between those partway through; it stays one
+// bridge_down. It can change between those partway through; it stays one
 // outage, and the summary records every transition and the worst status.
 //
 // Times follow ups-mqtt's approach (its internal/outages, whose clock code is
@@ -456,6 +456,8 @@ func (t *Tracker) remove() {
 // this package depends only on strings.
 func worse(a, b string) bool { return rank[a] > rank[b] }
 
-var rank = map[string]int{"tailnet_down": 1, "wan_down": 2, "lan_down": 3}
+// tailnet_down is bridge_down's name before 2026-10-14; a state file from then
+// may still hold it.
+var rank = map[string]int{"tailnet_down": 1, "bridge_down": 1, "wan_down": 2, "lan_down": 3}
 
 func isTrue(b *bool) bool { return b != nil && *b }
