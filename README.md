@@ -23,6 +23,12 @@ Every `interval` (10 s), in parallel:
 | `broker` | `100.64.0.20:1883` (garibaldi) | TCP connect |
 | `tailscale` | `tailscale status --json`, peer `garibaldi` | direct or relayed, endpoint, last handshake |
 
+`state` also carries `link`: the Pi's link status, type (ethernet or wifi), IP
+and wifi status/SSID, read each round from pi-helper's `/run/pi-helper.env`
+(github.com/sweeney/pi-helper). Like `tailscale`, it is reported only and does
+not affect the status. If the file is absent, `link` is left out; set
+`pi_helper_env = ""` to skip it.
+
 ICMP uses unprivileged ping sockets, which Debian's `net.ipv4.ping_group_range`
 allows for every group, so the service needs no capabilities.
 
@@ -73,7 +79,9 @@ not one per round.
            "dns":{"ok":true,"target":"1.1.1.1:53","rtt_ms":23.5},
            "broker":{"ok":true,"target":"100.64.0.20:1883","rtt_ms":39}},
  "tailscale":{"path":"direct","endpoint":"203.0.113.10:51826","relay":"lhr",
-              "online":true,"last_handshake":"2026-10-13T20:40:10Z"}}
+              "online":true,"last_handshake":"2026-10-13T20:40:10Z"},
+ "link":{"status":"connected","type":"ethernet","ip":"192.168.0.87",
+         "wifi_status":"disconnected"}}
 
 // last_outage
 {"started_at":"2026-10-13T10:02:10Z","ended_at":"2026-10-13T10:15:42Z",

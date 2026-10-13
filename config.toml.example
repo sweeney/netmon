@@ -17,6 +17,7 @@ dns_server  = "1.1.1.1:53"      # bypasses MagicDNS
 dns_name    = "example.com"
 broker_addr = "100.64.0.20:1883"   # garibaldi, as the bridge reaches it
 tailscale_peer = "garibaldi"
+pi_helper_env  = "/run/pi-helper.env"   # link type/IP/wifi, reported only; "" to skip
 degraded_loss_pct = 20
 degraded_rtt_ms   = 500
 

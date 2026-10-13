@@ -39,6 +39,7 @@ type Round struct {
 	DNS       Result
 	Broker    Result
 	Tailscale *Tailscale // nil when unavailable
+	Link      *Link      // nil when pi-helper's file is absent or unreadable
 }
 
 // Config says what to probe.
@@ -49,6 +50,7 @@ type Config struct {
 	DNSName       string
 	BrokerAddr    string // host:port
 	TailscalePeer string // host name of the broker's host; empty: skip
+	PiHelperEnv   string // pi-helper's env file; empty: skip
 	Count         int    // ICMP echoes per host per round
 	Timeout       time.Duration
 }
@@ -65,6 +67,7 @@ type System struct {
 	Ping       func(ctx context.Context, host string, count int, timeout time.Duration) PingStats
 	GatewayFn  func() (string, error)
 	TailscaleF func(ctx context.Context, peer string) (*Tailscale, error)
+	LinkFn     func(path string) (*Link, error)
 }
 
 // Round implements Prober. The checks run in parallel; a round takes about
@@ -81,6 +84,10 @@ func (s *System) Round(ctx context.Context) Round {
 	tsFn := s.TailscaleF
 	if tsFn == nil {
 		tsFn = TailscaleStatus
+	}
+	linkFn := s.LinkFn
+	if linkFn == nil {
+		linkFn = ReadLink
 	}
 	count, timeout := s.Cfg.Count, s.Cfg.Timeout
 	if count < 1 {
@@ -126,6 +133,11 @@ func (s *System) Round(ctx context.Context) Round {
 		}
 	}()
 	wg.Wait()
+	if s.Cfg.PiHelperEnv != "" {
+		if l, err := linkFn(s.Cfg.PiHelperEnv); err == nil {
+			r.Link = l
+		}
+	}
 	return r
 }
 

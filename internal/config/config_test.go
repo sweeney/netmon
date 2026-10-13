@@ -24,7 +24,8 @@ func TestExampleLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Site.ID != "schoolhouse" || cfg.Probe.Interval != 10*time.Second || cfg.Probe.BrokerAddr != "100.64.0.20:1883" ||
-		cfg.MQTT.ClientID != "netmon-schoolhouse" || cfg.StateDir != "/var/lib/netmon" {
+		cfg.MQTT.ClientID != "netmon-schoolhouse" || cfg.StateDir != "/var/lib/netmon" ||
+		cfg.Probe.PiHelperEnv != "/run/pi-helper.env" {
 		t.Errorf("got %+v", cfg)
 	}
 	if got := cfg.Topic("last_outage"); got != "sites/schoolhouse/network/last_outage" {

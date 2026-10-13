@@ -38,6 +38,7 @@ type ProbeConfig struct {
 	DNSName         string        `toml:"dns_name"`
 	BrokerAddr      string        `toml:"broker_addr"`
 	TailscalePeer   string        `toml:"tailscale_peer"`
+	PiHelperEnv     string        `toml:"pi_helper_env"` // empty: don't read it
 	DegradedLossPct float64       `toml:"degraded_loss_pct"`
 	DegradedRTTms   float64       `toml:"degraded_rtt_ms"`
 }
@@ -63,6 +64,7 @@ func Defaults() Config {
 			Internet:        []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"},
 			DNSServer:       "1.1.1.1:53",
 			DNSName:         "example.com",
+			PiHelperEnv:     "/run/pi-helper.env",
 			DegradedLossPct: 20,
 			DegradedRTTms:   500,
 		},

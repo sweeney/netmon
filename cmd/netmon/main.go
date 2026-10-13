@@ -56,7 +56,8 @@ func main() {
 		Gateway: cfg.Probe.Gateway, Internet: cfg.Probe.Internet,
 		DNSServer: cfg.Probe.DNSServer, DNSName: cfg.Probe.DNSName,
 		BrokerAddr: cfg.Probe.BrokerAddr, TailscalePeer: cfg.Probe.TailscalePeer,
-		Count: cfg.Probe.Count, Timeout: cfg.Probe.Timeout,
+		PiHelperEnv: cfg.Probe.PiHelperEnv,
+		Count:       cfg.Probe.Count, Timeout: cfg.Probe.Timeout,
 	}}
 	clock := outages.NewSystemClock()
 

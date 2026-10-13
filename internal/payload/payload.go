@@ -30,6 +30,15 @@ type Tailscale struct {
 	LastHandshake *time.Time `json:"last_handshake,omitempty"`
 }
 
+// Link is the Pi's local link, from pi-helper.
+type Link struct {
+	Status     string `json:"status,omitempty"`
+	Type       string `json:"type,omitempty"`
+	IP         string `json:"ip,omitempty"`
+	WifiStatus string `json:"wifi_status,omitempty"`
+	WifiSSID   string `json:"wifi_ssid,omitempty"`
+}
+
 // State is published every round.
 type State struct {
 	Timestamp   time.Time        `json:"timestamp"`
@@ -40,6 +49,7 @@ type State struct {
 	RawStatus   string           `json:"raw_status"`
 	Checks      map[string]Check `json:"checks"`
 	Tailscale   *Tailscale       `json:"tailscale,omitempty"`
+	Link        *Link            `json:"link,omitempty"`
 }
 
 // NewState builds the state payload. status is the smoothed status ("" while
@@ -67,6 +77,9 @@ func NewState(now time.Time, synced *bool, status, raw string, since *time.Time,
 	}
 	if ts := r.Tailscale; ts != nil {
 		s.Tailscale = &Tailscale{Path: ts.Path, Endpoint: ts.Endpoint, Relay: ts.Relay, Online: ts.Online, LastHandshake: ts.LastHandshake}
+	}
+	if l := r.Link; l != nil {
+		s.Link = &Link{Status: l.Status, Type: l.Type, IP: l.IP, WifiStatus: l.WifiStatus, WifiSSID: l.WifiSSID}
 	}
 	return s
 }
