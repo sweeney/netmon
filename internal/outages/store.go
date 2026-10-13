@@ -21,7 +21,7 @@ type FileStore struct {
 }
 
 // Load implements Store.
-func (s *FileStore) Load() (*Record, error) {
+func (s *FileStore) Load() (*State, error) {
 	data, err := os.ReadFile(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -29,21 +29,42 @@ func (s *FileStore) Load() (*Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	var rec Record
-	if err := json.Unmarshal(data, &rec); err != nil {
+	var st State
+	if err := json.Unmarshal(data, &st); err != nil {
 		return nil, fmt.Errorf("%w: parsing %s: %v", ErrCorrupt, s.Path, err)
 	}
-	if len(rec.Transitions) == 0 || rec.Transitions[0].At.IsZero() {
-		return nil, fmt.Errorf("%w: parsing %s: no start", ErrCorrupt, s.Path)
+	if err := st.valid(); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrCorrupt, s.Path, err)
 	}
-	return &rec, nil
+	return &st, nil
+}
+
+func (st State) valid() error {
+	recs := st.Pending
+	if st.Open != nil {
+		recs = append(recs, *st.Open)
+	}
+	if len(recs) == 0 {
+		return errors.New("no outages")
+	}
+	for i, r := range recs {
+		if len(r.Transitions) == 0 || r.Transitions[0].At.IsZero() {
+			return fmt.Errorf("outage %d has no start", i)
+		}
+	}
+	for i, r := range st.Pending {
+		if len(r.Transitions) < 2 {
+			return fmt.Errorf("ended outage %d has no end", i)
+		}
+	}
+	return nil
 }
 
 // Save implements Store. The file is written beside the target, synced and
 // renamed into place, and the directory is synced too: this file exists for
 // power loss, so it must survive one.
-func (s *FileStore) Save(rec Record) error {
-	data, err := json.MarshalIndent(rec, "", "  ")
+func (s *FileStore) Save(st State) error {
+	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -95,6 +116,6 @@ func syncDir(dir string) error {
 // NopStore persists nothing; used when no state directory is configured.
 type NopStore struct{}
 
-func (NopStore) Load() (*Record, error) { return nil, nil }
-func (NopStore) Save(Record) error      { return nil }
-func (NopStore) Remove() error          { return nil }
+func (NopStore) Load() (*State, error) { return nil, nil }
+func (NopStore) Save(State) error      { return nil }
+func (NopStore) Remove() error         { return nil }

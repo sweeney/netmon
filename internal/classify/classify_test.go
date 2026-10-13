@@ -88,9 +88,20 @@ func TestHysteresis(t *testing.T) {
 		{"easing within an outage needs up_after", []step{
 			{LANDown, Unknown, false}, {LANDown, Unknown, false}, {LANDown, LANDown, true},
 			{TailnetDown, LANDown, false}, {TailnetDown, TailnetDown, true}}},
-		{"an interrupted run starts again", []step{
+		{"a run interrupted by the current status starts again", []step{
 			{OK, Unknown, false}, {OK, OK, true},
-			{WANDown, OK, false}, {WANDown, OK, false}, {LANDown, OK, false}, {WANDown, OK, false}, {WANDown, OK, false}, {WANDown, WANDown, true}}},
+			{WANDown, OK, false}, {WANDown, OK, false}, {OK, OK, false}, {WANDown, OK, false}, {WANDown, OK, false}, {WANDown, WANDown, true}}},
+		{"flapping between outage kinds settles on the worst", []step{
+			{OK, Unknown, false}, {OK, OK, true},
+			{LANDown, OK, false}, {WANDown, OK, false}, {LANDown, LANDown, true},
+			{WANDown, LANDown, false}, {LANDown, LANDown, false}, {WANDown, LANDown, false}}},
+		{"recovery with latency spikes still ends the outage", []step{
+			{WANDown, Unknown, false}, {WANDown, Unknown, false}, {WANDown, WANDown, true},
+			{OK, WANDown, false}, {Degraded, Degraded, true}, {OK, Degraded, false}, {Degraded, Degraded, false}, {OK, Degraded, false}, {OK, OK, true}}},
+		{"first status: mixed non-outage rounds", []step{{Degraded, Unknown, false}, {OK, Degraded, true}}},
+		{"direction change starts a new run", []step{
+			{WANDown, Unknown, false}, {WANDown, Unknown, false}, {WANDown, WANDown, true},
+			{LANDown, WANDown, false}, {LANDown, WANDown, false}, {OK, WANDown, false}, {OK, OK, true}}},
 		{"degraded is worse than ok", []step{{OK, Unknown, false}, {OK, OK, true}, {Degraded, OK, false}, {Degraded, OK, false}, {Degraded, Degraded, true}}},
 	}
 	for _, c := range cases {

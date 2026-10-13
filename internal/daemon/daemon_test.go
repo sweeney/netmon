@@ -164,7 +164,7 @@ func TestOutageEndToEnd(t *testing.T) {
 	if !(iClear < iSum && iSum < iState) {
 		t.Errorf("order: clear %d, summary %d, state %d", iClear, iSum, iState)
 	}
-	if r.store.Rec != nil {
+	if r.store.State() != nil {
 		t.Error("state file left after the summary went out")
 	}
 }

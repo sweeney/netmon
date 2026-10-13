@@ -78,18 +78,22 @@ func Raw(r probe.Round, t Thresholds) Status {
 	return OK
 }
 
-// Hysteresis holds a status until another one has been seen for enough
-// consecutive rounds: DownAfter rounds to get worse, UpAfter to get better.
-// The first status needs UpAfter rounds if it is ok or degraded, DownAfter if
-// it is an outage.
+// Hysteresis holds a status until enough consecutive rounds point away from
+// it: DownAfter rounds worse than it to get worse, UpAfter rounds better than
+// it to get better. The rounds in a run need not agree with each other (a
+// flaky gateway during a WAN outage alternates lan_down and wan_down); the run
+// settles on the worst status it saw, dated from its first round. Before the
+// first status settles, a run is rounds on the same side of "outage": DownAfter
+// of them for an outage, UpAfter otherwise.
 type Hysteresis struct {
 	DownAfter int
 	UpAfter   int
 
-	current   Status
-	candidate Status
-	count     int
-	since     time.Duration
+	current Status
+	dir     int    // the run's direction: +1 worse, -1 better, 0 none
+	worst   Status // the worst status in the run
+	count   int
+	since   time.Duration
 }
 
 // Current is the smoothed status; Unknown until the first one settles.
@@ -103,20 +107,28 @@ func (h *Hysteresis) Observe(raw Status) (Status, bool) {
 }
 
 // ObserveAt is Observe that also returns, on a change, when the new status
-// began: the reading of the first round in the run that settled it. A
-// status is dated from its first round, not from when it was confirmed.
+// began: the reading (any monotonic clock) passed with the run's first round.
 func (h *Hysteresis) ObserveAt(raw Status, at time.Duration) (Status, bool, time.Duration) {
-	if raw == h.current {
-		h.candidate, h.count = Unknown, 0
+	var dir, need int
+	switch {
+	case h.current == Unknown && raw.IsOutage():
+		dir, need = 1, h.DownAfter
+	case h.current == Unknown:
+		dir, need = -1, h.UpAfter
+	case raw.Worse(h.current):
+		dir, need = 1, h.DownAfter
+	case h.current.Worse(raw):
+		dir, need = -1, h.UpAfter
+	default: // the current status again: any run is over
+		h.dir, h.count = 0, 0
 		return h.current, false, 0
 	}
-	if raw != h.candidate {
-		h.candidate, h.count, h.since = raw, 0, at
+	if dir != h.dir || h.count == 0 {
+		h.dir, h.count, h.worst, h.since = dir, 0, raw, at
 	}
 	h.count++
-	need := h.UpAfter
-	if raw.Worse(h.current) && h.current != Unknown || h.current == Unknown && raw.IsOutage() {
-		need = h.DownAfter
+	if raw.Worse(h.worst) {
+		h.worst = raw
 	}
 	if need < 1 {
 		need = 1
@@ -124,6 +136,6 @@ func (h *Hysteresis) ObserveAt(raw Status, at time.Duration) (Status, bool, time
 	if h.count < need {
 		return h.current, false, 0
 	}
-	h.current, h.candidate, h.count = raw, Unknown, 0
+	h.current, h.dir, h.count = h.worst, 0, 0
 	return h.current, true, h.since
 }

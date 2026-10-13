@@ -38,9 +38,12 @@ Each round gets one raw status, checking from the Pi outwards:
 5. otherwise → `ok`
 
 **Hysteresis:** the published status gets worse only after `down_after` (3)
-rounds in a row, and better only after `up_after` (2). A change is dated from
-the first round of the run that settled it, not from when it was confirmed.
-The status is `unknown` until it first settles, about 20 s after start.
+rounds in a row that are worse than it, and better only after `up_after` (2)
+rounds in a row that are better. The rounds in a run need not agree. A flaky
+gateway during a WAN outage alternates `lan_down` and `wan_down`, and a
+recovering link alternates `ok` and `degraded`. The run settles on the worst
+status it saw, dated from its first round. The status is `unknown` until it
+first settles, about 20 s after start.
 
 An **outage** is any time spent in `lan_down`, `wan_down` or `tailnet_down`.
 `degraded` is shown live but is not an outage. If the status changes partway
@@ -93,8 +96,10 @@ until NTP syncs, which needs the network that may be down. So:
 - If the clock has not synced when an outage ends, the summary waits up to
   15 minutes. It then goes out marked `clock_synced: false`, and a corrected
   one follows after the sync.
-- The open outage is saved to `$STATE_DIRECTORY/outage.json`, on transitions
-  only, to spare the SD card.
+- The open outage, and any ended ones whose summaries have not gone out yet,
+  are saved to `$STATE_DIRECTORY/outage.json`, on transitions only, to spare
+  the SD card. A new outage starting does not drop an older unpublished
+  summary. Up to 10 are queued, and they go out oldest first.
 - On restart, an outage still in progress is resumed. One that ended while
   netmon was not running is reported with `spans_restart: true`. Its end is
   boot time if the Pi rebooted, or this process's start if it didn't.

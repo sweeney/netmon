@@ -1,6 +1,9 @@
 package outages
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // FakeClock is a Clock for tests.  Advance moves both clocks, as time
 // passing does; Step moves only the wall clock, as an NTP sync does.
@@ -48,39 +51,54 @@ func (c *FakeClock) Step(d time.Duration) {
 	c.IsSynced, c.SyncKnown = true, true
 }
 
-// MemoryStore is a Store for tests.  It outlives a Tracker, the way the state
-// file outlives a process.
+// MemoryStore is a Store for tests. It outlives a Tracker, as the state file
+// outlives a process, and round-trips through JSON as the file does, so
+// nothing in memory only (the monotonic anchors) survives a "restart".
 type MemoryStore struct {
-	Rec *Record
-	// Saves counts writes, to check that only transitions are written.
+	data    []byte
 	Saves   int
 	Removes int
-	// SaveErr, when set, is returned by Save.
 	SaveErr error
 }
 
 // Load implements Store.
-func (s *MemoryStore) Load() (*Record, error) {
-	if s.Rec == nil {
+func (s *MemoryStore) Load() (*State, error) {
+	if s.data == nil {
 		return nil, nil
 	}
-	r := *s.Rec
-	return &r, nil
+	var st State
+	if err := json.Unmarshal(s.data, &st); err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
 
 // Save implements Store.
-func (s *MemoryStore) Save(r Record) error {
+func (s *MemoryStore) Save(st State) error {
 	if s.SaveErr != nil {
 		return s.SaveErr
 	}
+	b, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
 	s.Saves++
-	s.Rec = &r
+	s.data = b
 	return nil
 }
 
 // Remove implements Store.
 func (s *MemoryStore) Remove() error {
 	s.Removes++
-	s.Rec = nil
+	s.data = nil
 	return nil
 }
+
+// State is what is stored, or nil.
+func (s *MemoryStore) State() *State {
+	st, _ := s.Load()
+	return st
+}
+
+// Set replaces what is stored.
+func (s *MemoryStore) Set(st State) { _ = s.Save(st); s.Saves-- }

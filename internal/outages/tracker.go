@@ -50,21 +50,31 @@ type Transition struct {
 	mono *time.Duration // anchor in this process; nil if restored without one
 }
 
-// Record is what is persisted about an outage. It is written only on
+// Record is what is persisted about one outage. It is written only on
 // transitions, to spare the SD card.
 type Record struct {
+	// BootID is the boot whose monotonic clock the SinceBoot values are on.
 	BootID      string       `json:"boot_id,omitempty"`
 	Transitions []Transition `json:"transitions"`
 	WorstStatus string       `json:"worst_status"`
-	// Ended is set once the outage is over, while its summary waits.
-	Ended        bool `json:"ended,omitempty"`
+	// SpansRestart: a process restart or reboot happened during the outage.
 	SpansRestart bool `json:"spans_restart,omitempty"`
-	// RestartEnd marks an outage that ended while no process was watching:
-	// its end is boot time after a reboot, else this process's start.
-	RestartEnd bool `json:"restart_end,omitempty"`
-
-	endStatus string // with RestartEnd: the status found on restart
+	// InterimSent: an interim summary went out; only the corrected one is due.
+	InterimSent bool `json:"interim_sent,omitempty"`
 }
+
+// State is everything persisted: the outage in progress, if any, and the
+// ended ones whose summaries have not gone out yet, oldest first. A new
+// outage can start while an older summary still waits for the clock to sync
+// or for the broker.
+type State struct {
+	Open    *Record  `json:"open,omitempty"`
+	Pending []Record `json:"pending,omitempty"`
+}
+
+// MaxPending bounds the queue of unpublished summaries; past it the oldest is
+// dropped (and logged).
+const MaxPending = 10
 
 // Open describes the outage in progress.
 type Open struct {
@@ -97,10 +107,10 @@ type Summary struct {
 // Duration is EndedAt − StartedAt.
 func (s Summary) Duration() time.Duration { return s.EndedAt.Sub(s.StartedAt) }
 
-// Store persists the Record of the outage being tracked: at most one.
+// Store persists the State.
 type Store interface {
-	Load() (*Record, error)
-	Save(Record) error
+	Load() (*State, error)
+	Save(State) error
 	Remove() error
 }
 
@@ -113,14 +123,12 @@ type Tracker struct {
 
 	restoreDone bool
 	open        *Record
-	pending     *pendingSummary
+	pending     []*pendingSummary
 }
 
 type pendingSummary struct {
-	rec         Record
-	rebooted    *bool
-	since       time.Duration // Mono when it became due
-	interimSent bool
+	rec   Record
+	since time.Duration // Mono when it became due, for SyncWait
 }
 
 // NewTracker returns a Tracker persisting to store.
@@ -128,21 +136,23 @@ func NewTracker(clock Clock, store Store) *Tracker {
 	return &Tracker{clock: clock, store: store, SyncWait: DefaultSyncWait}
 }
 
-// Restore picks up an outage a previous process left on disk. Call it once
-// the status first settles, with that status and whether it is an outage;
-// only the first call does anything.
+// Restore picks up what a previous process left on disk. Call it once the
+// status first settles, with that status and whether it is an outage; only
+// the first call does anything.
 //
-//   - An ended outage not yet reported is reported as stored.
+//   - Summaries not yet published are queued again.
 //   - An open outage while the network is down now is resumed.
 //   - An open outage while the network is up now ended while no process was
 //     watching: at boot if the host rebooted since, else at this process's
-//     start. Either way it is reported with spans_restart.
+//     start. That end is recorded once, so a further restart does not move it.
+//
+// Either way the outage is reported with spans_restart.
 func (t *Tracker) Restore(status string, down bool) {
 	if t.restoreDone {
 		return
 	}
 	t.restoreDone = true
-	rec, err := t.store.Load()
+	st, err := t.store.Load()
 	if errors.Is(err, ErrCorrupt) {
 		log.Printf("outage state corrupt, discarding it: %v", err)
 		t.remove()
@@ -152,45 +162,59 @@ func (t *Tracker) Restore(status string, down bool) {
 		log.Printf("outage state unreadable, ignoring it for now: %v", err)
 		return
 	}
-	if rec == nil || len(rec.Transitions) == 0 {
+	if st == nil {
 		return
 	}
+	for _, rec := range st.Pending {
+		rec := rec
+		t.adopt(&rec)
+		t.pending = append(t.pending, &pendingSummary{rec: rec, since: t.clock.Mono()})
+		log.Printf("network outage started %s ended before this process started and is still unreported", startedStr(rec))
+	}
+	if rec := st.Open; rec != nil {
+		rebooted := t.adopt(rec)
+		rec.SpansRestart = true
+		if down {
+			t.open = rec
+			log.Printf("resuming network outage started %s", startedStr(*rec))
+		} else {
+			end := time.Duration(0) // this process's start
+			if boot, ok := t.clock.BootMono(); ok {
+				startWall := t.wallOf(rec.Transitions[0])
+				if isTrue(rebooted) || rebooted == nil && t.wallAt(boot).After(startWall) {
+					end = boot
+				}
+			}
+			rec.Transitions = append(rec.Transitions, t.at(status, end))
+			t.pending = append(t.pending, &pendingSummary{rec: *rec, since: t.clock.Mono()})
+			log.Printf("network outage started %s ended while netmon was not running", startedStr(*rec))
+		}
+	}
+	t.trimPending()
+	t.save()
+}
+
+// adopt makes a stored record this boot's: anchors from the same boot are
+// rebuilt from their time since boot; those from another boot are dropped,
+// and the record moves to this boot. It returns whether the host rebooted
+// since the record was written (nil if unknown).
+func (t *Tracker) adopt(rec *Record) *bool {
 	rebooted := t.rebootedSince(rec)
 	rec.Transitions = append([]Transition(nil), rec.Transitions...)
 	for i := range rec.Transitions {
-		// A previous process's anchors mean nothing here; within the same
-		// boot they can be rebuilt from the time since boot.
-		rec.Transitions[i].mono = nil
+		x := &rec.Transitions[i]
+		x.mono = nil
 		if rebooted != nil && !*rebooted {
-			rec.Transitions[i].mono = t.reanchor(rec.Transitions[i].SinceBoot)
+			x.mono = t.reanchor(x.SinceBoot)
+		} else {
+			x.SinceBoot = nil
 		}
 	}
-	started := rec.Transitions[0].At.UTC().Format(time.RFC3339)
-	switch {
-	case rec.Ended:
-		t.pending = &pendingSummary{rec: *rec, rebooted: rebooted, since: t.clock.Mono()}
-		log.Printf("network outage started %s ended before this process started and is still unreported", started)
-	case down:
-		rec.SpansRestart = true
-		if rebooted != nil && *rebooted {
-			// The record now belongs to this boot; its old anchors do not.
-			rec.BootID = t.clock.BootID()
-			for i := range rec.Transitions {
-				rec.Transitions[i].SinceBoot = nil
-			}
-		}
-		t.open = rec
-		t.save(*rec)
-		log.Printf("resuming network outage started %s", started)
-	default:
-		// Not saved: the record stays open on disk, so a restart before the
-		// summary goes out reaches the same conclusion.
-		rec.Ended, rec.SpansRestart, rec.RestartEnd = true, true, true
-		rec.endStatus = status
-		t.pending = &pendingSummary{rec: *rec, rebooted: rebooted, since: t.clock.Mono()}
-		log.Printf("network outage started %s ended while netmon was not running", started)
-	}
+	rec.BootID = t.clock.BootID()
+	return rebooted
 }
+
+func startedStr(rec Record) string { return rec.Transitions[0].At.UTC().Format(time.RFC3339) }
 
 // Observe records a change of the smoothed status, now. It returns whether
 // an outage started and whether one ended with this change.
@@ -207,13 +231,8 @@ func (t *Tracker) ObserveAt(status string, isOutage bool, mono time.Duration) (s
 	}
 	switch {
 	case isOutage && t.open == nil:
-		if t.pending != nil {
-			log.Printf("dropping unpublished summary of the network outage started %s; superseded by a new one",
-				t.wallOf(t.pending.rec.Transitions[0]).UTC().Format(time.RFC3339))
-			t.pending = nil
-		}
 		t.open = &Record{BootID: t.clock.BootID(), WorstStatus: status, Transitions: []Transition{t.at(status, mono)}}
-		t.save(*t.open)
+		t.save()
 		return true, false
 	case isOutage:
 		if tr := t.open.Transitions; tr[len(tr)-1].Status == status {
@@ -223,21 +242,26 @@ func (t *Tracker) ObserveAt(status string, isOutage bool, mono time.Duration) (s
 		if worse(status, t.open.WorstStatus) {
 			t.open.WorstStatus = status
 		}
-		t.save(*t.open)
+		t.save()
 		return false, false
 	case t.open != nil:
 		rec := *t.open
 		t.open = nil
 		rec.Transitions = append(rec.Transitions, t.at(status, mono))
-		rec.Ended = true
-		rec.BootID = t.clock.BootID()
-		t.save(rec)
-		t.pending = &pendingSummary{rec: rec, since: t.clock.Mono()}
-		f := false
-		t.pending.rebooted = &f
+		t.pending = append(t.pending, &pendingSummary{rec: rec, since: t.clock.Mono()})
+		t.trimPending()
+		t.save()
 		return false, true
 	}
 	return false, false
+}
+
+func (t *Tracker) trimPending() {
+	for len(t.pending) > MaxPending {
+		log.Printf("dropping unpublished summary of the network outage started %s: %d are queued",
+			t.wallOf(t.pending[0].rec.Transitions[0]).UTC().Format(time.RFC3339), len(t.pending))
+		t.pending = t.pending[1:]
+	}
 }
 
 // Current returns the outage in progress, if any.
@@ -255,19 +279,25 @@ func (t *Tracker) Current() (Open, bool) {
 	}, true
 }
 
-// Due returns the summary to publish now, if any. After a successful publish
-// call Published with it; until then Due keeps returning it.
+// Due returns the summary to publish now, if any: the oldest one queued.
+// After a successful publish call Published with it; until then Due keeps
+// returning it.
+//
+// A summary is final once the wall clock is synced, or sync cannot be
+// determined, or its end cannot be corrected by a sync anyway. Until then it
+// waits up to SyncWait, after which one interim summary goes out marked
+// clock_synced: false, and the corrected one follows the sync.
 func (t *Tracker) Due() (Summary, bool) {
-	p := t.pending
-	if p == nil {
+	if len(t.pending) == 0 {
 		return Summary{}, false
 	}
-	s := t.summarise(p)
+	p := t.pending[0]
+	s := t.summarise(p.rec)
 	synced, known := t.clock.Synced()
 	switch {
-	case !known || synced || !t.repairable(p) || t.open != nil:
+	case !known || synced || !t.repairable(p.rec):
 		s.Final = true
-	case !p.interimSent && t.clock.Mono()-p.since >= t.SyncWait:
+	case !p.rec.InterimSent && t.clock.Mono()-p.since >= t.SyncWait:
 		s.Final = false
 	default:
 		return Summary{}, false
@@ -275,44 +305,25 @@ func (t *Tracker) Due() (Summary, bool) {
 	return s, true
 }
 
-// Published records that s went out. A final summary is done with, and the
-// state file removed unless a new outage owns it.
+// Published records that s, the summary Due returned, went out.
 func (t *Tracker) Published(s Summary) {
-	if t.pending == nil {
+	if len(t.pending) == 0 {
 		return
 	}
 	if !s.Final {
-		t.pending.interimSent = true
-		return
+		t.pending[0].rec.InterimSent = true
+	} else {
+		t.pending = t.pending[1:]
 	}
-	t.pending = nil
-	if t.open == nil {
-		t.remove()
-	}
+	t.save()
 }
 
-func (t *Tracker) summarise(p *pendingSummary) Summary {
-	tr := p.rec.Transitions
-	start := t.wallOf(tr[0])
-	var end time.Time
+func (t *Tracker) summarise(rec Record) Summary {
+	tr := rec.Transitions
 	outs := t.out(tr)
-	if p.rec.RestartEnd {
-		end = t.wallAt(0)
-		if boot, ok := t.clock.BootMono(); ok {
-			bootWall := t.wallAt(boot)
-			if (p.rebooted != nil && *p.rebooted) || (p.rebooted == nil && bootWall.After(start)) {
-				end = bootWall
-			}
-		}
-		if end.Before(outs[len(outs)-1].At) {
-			end = outs[len(outs)-1].At
-		}
-		outs = append(outs, TransitionOut{At: end.UTC(), Status: p.rec.endStatus})
-	} else {
-		end = outs[len(outs)-1].At
-	}
+	start, end := outs[0].At, outs[len(outs)-1].At
 	if end.Before(start) {
-		end = start
+		end = start // a clock that was badly wrong at the start
 	}
 	var cs *bool
 	if synced, known := t.clock.Synced(); known {
@@ -320,24 +331,20 @@ func (t *Tracker) summarise(p *pendingSummary) Summary {
 		cs = &ok
 	}
 	return Summary{
-		StartedAt:    start.UTC(),
-		EndedAt:      end.UTC(),
-		WorstStatus:  p.rec.WorstStatus,
+		StartedAt:    start,
+		EndedAt:      end,
+		WorstStatus:  rec.WorstStatus,
 		Transitions:  outs,
 		ClockSynced:  cs,
-		SpansRestart: p.rec.SpansRestart,
+		SpansRestart: rec.SpansRestart,
 	}
 }
 
 // repairable reports whether the end is anchored on this boot's monotonic
-// clock, so that a later clock sync corrects it: an end seen by this process,
-// or one taken to be boot time or this process's start. Whether the start is
-// right as well is what clock_synced says.
-func (t *Tracker) repairable(p *pendingSummary) bool {
-	if p.rec.RestartEnd {
-		return true
-	}
-	tr := p.rec.Transitions
+// clock, so that a later clock sync corrects it. Whether the start is right as
+// well is what clock_synced says.
+func (t *Tracker) repairable(rec Record) bool {
+	tr := rec.Transitions
 	return tr[len(tr)-1].mono != nil
 }
 
@@ -417,8 +424,18 @@ func (t *Tracker) syncedNow() *bool {
 	return &synced
 }
 
-func (t *Tracker) save(rec Record) {
-	if err := t.store.Save(rec); err != nil {
+// save writes the whole state, or removes the file when there is nothing to
+// keep.
+func (t *Tracker) save() {
+	if t.open == nil && len(t.pending) == 0 {
+		t.remove()
+		return
+	}
+	st := State{Open: t.open}
+	for _, p := range t.pending {
+		st.Pending = append(st.Pending, p.rec)
+	}
+	if err := t.store.Save(st); err != nil {
 		log.Printf("saving outage state: %v", err)
 	}
 }

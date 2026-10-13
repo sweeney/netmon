@@ -68,7 +68,7 @@ func TestOutageLifecycle(t *testing.T) {
 	if _, ok := tr.Due(); ok {
 		t.Error("still due after publish")
 	}
-	if st.Rec != nil {
+	if st.State() != nil {
 		t.Error("state file not removed")
 	}
 }
@@ -112,17 +112,106 @@ func TestUnsyncedClockInterimThenFinal(t *testing.T) {
 	}
 }
 
-func TestNewOutageSupersedesUnpublishedSummary(t *testing.T) {
-	c := newClock()
-	tr := NewTracker(c, &MemoryStore{})
+func TestUnpublishedSummarySurvivesANewOutage(t *testing.T) {
+	c, st := newClock(), &MemoryStore{}
+	c.IsSynced = false // the first summary waits for a sync
+	tr := NewTracker(c, st)
 	tr.Restore("ok", false)
 	tr.Observe("wan_down", true)
 	c.Advance(time.Minute)
-	tr.Observe("ok", false) // summary never published
+	tr.Observe("ok", false)
 	c.Advance(time.Minute)
-	tr.Observe("lan_down", true)
+	tr.Observe("lan_down", true) // a second outage before the first is reported
+	if st.State().Open == nil || len(st.State().Pending) != 1 {
+		t.Fatalf("stored: %+v", st.State())
+	}
+	c.Step(0) // synced
+	s := mustDue(t, tr)
+	if s.WorstStatus != "wan_down" || s.Duration() != time.Minute {
+		t.Errorf("the first summary: %+v", s)
+	}
+	tr.Published(s)
 	if _, ok := tr.Due(); ok {
-		t.Error("the superseded summary is still due")
+		t.Error("due again")
+	}
+	if st.State() == nil || st.State().Open == nil || len(st.State().Pending) != 0 {
+		t.Errorf("after publishing: %+v", st.State())
+	}
+}
+
+func TestPendingSurvivesRestartIntoAnOutage(t *testing.T) {
+	c, st := newClock(), &MemoryStore{}
+	tr := NewTracker(c, st)
+	tr.Restore("ok", false)
+	tr.Observe("tailnet_down", true)
+	c.Advance(time.Minute)
+	tr.Observe("ok", false) // ended, never published
+	tr2, _ := restart(c, st, false)
+	tr2.Restore("wan_down", true) // the restart lands in a new outage
+	tr2.Observe("wan_down", true)
+	s := mustDue(t, tr2)
+	if s.WorstStatus != "tailnet_down" || s.Duration() != time.Minute {
+		t.Errorf("summary: %+v", s)
+	}
+	if _, open := tr2.Current(); !open {
+		t.Error("new outage not open")
+	}
+}
+
+func TestRestartEndIsFixedOnce(t *testing.T) {
+	c, st := newClock(), &MemoryStore{}
+	tr := NewTracker(c, st)
+	tr.Restore("ok", false)
+	tr.Observe("lan_down", true)
+	c.Advance(10 * time.Minute)
+	tr2, c2 := restart(c, st, false) // network back while not running
+	tr2.Restore("ok", false)
+	first := mustDue(t, tr2)
+	c2.Advance(5 * time.Minute)
+	tr3, _ := restart(c2, st, false) // and again before the summary goes out
+	tr3.Restore("ok", false)
+	again := mustDue(t, tr3)
+	if !again.EndedAt.Equal(first.EndedAt) || again.Duration() != 10*time.Minute {
+		t.Errorf("end moved: %s then %s", first.EndedAt, again.EndedAt)
+	}
+}
+
+func TestInterimSentSurvivesRestart(t *testing.T) {
+	c, st := newClock(), &MemoryStore{}
+	c.IsSynced = false
+	tr := NewTracker(c, st)
+	tr.Restore("ok", false)
+	tr.Observe("wan_down", true)
+	c.Advance(time.Minute)
+	tr.Observe("ok", false)
+	c.Advance(DefaultSyncWait)
+	s := mustDue(t, tr)
+	tr.Published(s) // interim
+	tr2, c2 := restart(c, st, false)
+	tr2.Restore("ok", false)
+	c2.Advance(DefaultSyncWait)
+	if _, ok := tr2.Due(); ok {
+		t.Error("a second interim after a restart")
+	}
+	c2.Step(0)
+	if s := mustDue(t, tr2); !s.Final {
+		t.Error("corrected summary not final")
+	}
+}
+
+func TestPendingQueueIsBounded(t *testing.T) {
+	c := newClock()
+	c.IsSynced = false
+	tr := NewTracker(c, &MemoryStore{})
+	tr.Restore("ok", false)
+	for i := 0; i < MaxPending+3; i++ {
+		tr.Observe("wan_down", true)
+		c.Advance(time.Minute)
+		tr.Observe("ok", false)
+		c.Advance(time.Minute)
+	}
+	if len(tr.pending) != MaxPending {
+		t.Errorf("queued %d", len(tr.pending))
 	}
 }
 
@@ -179,11 +268,11 @@ func TestRestartAfterOutageEndedWhileNotRunning(t *testing.T) {
 	if last := s.Transitions[len(s.Transitions)-1]; last.Status != "ok" {
 		t.Errorf("last transition: %+v", last)
 	}
-	if st.Rec == nil {
+	if st.State() == nil {
 		t.Fatal("record removed before the summary went out")
 	}
 	tr2.Published(s)
-	if st.Rec != nil {
+	if st.State() != nil {
 		t.Error("record kept after the summary went out")
 	}
 }
@@ -222,10 +311,10 @@ func TestRebootDuringOutageResumesWithoutAnchor(t *testing.T) {
 	tr.Observe("wan_down", true)
 	tr2, c2 := restart(c, st, true)
 	tr2.Restore("wan_down", true)
-	if st.Rec.BootID != c2.BootIDValue {
+	if st.State().Open.BootID != c2.BootIDValue {
 		t.Error("record not moved to the new boot")
 	}
-	for _, x := range st.Rec.Transitions {
+	for _, x := range st.State().Open.Transitions {
 		if x.SinceBoot != nil {
 			t.Error("old boot's anchor kept")
 		}
@@ -255,7 +344,8 @@ func TestEndedButUnpublishedSurvivesRestart(t *testing.T) {
 }
 
 func TestRestoreOnlyOnce(t *testing.T) {
-	st := &MemoryStore{Rec: &Record{Transitions: []Transition{{At: t0, Status: "wan_down"}}, WorstStatus: "wan_down"}}
+	st := &MemoryStore{}
+	st.Set(State{Open: &Record{Transitions: []Transition{{At: t0, Status: "wan_down"}}, WorstStatus: "wan_down"}})
 	tr := NewTracker(newClock(), st)
 	tr.Restore("wan_down", true)
 	tr.Restore("ok", false)
@@ -271,12 +361,19 @@ func TestFileStore(t *testing.T) {
 		t.Fatalf("empty: %v %v", r, err)
 	}
 	rec := Record{BootID: "b", WorstStatus: "lan_down", Transitions: []Transition{{At: t0, Status: "lan_down", SinceBoot: dur(time.Hour)}}}
-	if err := s.Save(rec); err != nil {
+	if err := s.Save(State{Open: &rec}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Load()
-	if err != nil || got.WorstStatus != "lan_down" || *got.Transitions[0].SinceBoot != time.Hour || !got.Transitions[0].At.Equal(t0) {
+	if err != nil || got.Open.WorstStatus != "lan_down" || *got.Open.Transitions[0].SinceBoot != time.Hour || !got.Open.Transitions[0].At.Equal(t0) {
 		t.Fatalf("round trip: %+v %v", got, err)
+	}
+	bad := State{Pending: []Record{rec}} // an ended outage needs an end
+	if err := s.Save(bad); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Load(); err == nil {
+		t.Error("pending without an end: want an error")
 	}
 	if err := os.WriteFile(s.Path, []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
