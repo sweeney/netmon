@@ -7,7 +7,7 @@ When the schoolhouse goes dark, garibaldi sees only the bridge's
 answer goes out live while the link is up, and as a summary that the Pi's
 bridge queues and delivers once the link is back.
 
-Status: **built and tested, not deployed.** Deploying needs sudo on the Pi.
+Status: **deployed** on pi3b-schoolhouse since 2026-10-14. Upgrades need sudo on the Pi.
 The design is in `pi-setup/PLAN.md`, and how it fits with the bridge and
 ups-mqtt is in `pi-setup/ARCHITECTURE.md`.
 
@@ -100,7 +100,9 @@ has no real-time clock, so after a power-loss reboot its wall clock is wrong
 until NTP syncs, which needs the network that may be down. So:
 
 - Every transition is anchored on the monotonic clock. Wall times are worked
-  out when they are published, so a clock that syncs later corrects them.
+  out when they are published, so a clock that syncs later corrects them. They
+  are rounded to the second, so a fixed time (`status_since`, an outage's
+  transitions) is identical in every payload; only `timestamp` is precise.
 - If the clock has not synced when an outage ends, the summary waits up to
   15 minutes. It then goes out marked `clock_synced: false`, and a corrected
   one follows after the sync.

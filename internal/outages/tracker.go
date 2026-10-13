@@ -385,8 +385,14 @@ func (t *Tracker) allSynced(tr []Transition) *bool {
 	return &ok
 }
 
-func (t *Tracker) wallAt(m time.Duration) time.Time {
-	return t.clock.Now().Add(m - t.clock.Mono())
+func (t *Tracker) wallAt(m time.Duration) time.Time { return WallAt(t.clock, m) }
+
+// WallAt is the wall time of monotonic instant m, as best known now. It is
+// worked out afresh each time, so a clock that syncs later corrects it, and
+// rounded to the second: Now and Mono drift apart by microseconds (NTP slews
+// the wall clock), and an unrounded time would differ in every payload.
+func WallAt(c Clock, m time.Duration) time.Time {
+	return c.Now().Add(m - c.Mono()).Round(time.Second)
 }
 
 func (t *Tracker) rebootedSince(rec *Record) *bool {

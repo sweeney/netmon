@@ -145,7 +145,7 @@ func (d *Daemon) publishSummary() {
 func (d *Daemon) publishState(st, raw classify.Status, r probe.Round) {
 	var since *time.Time
 	if d.sinceMono != nil {
-		t := d.Clock.Now().Add(*d.sinceMono - d.Clock.Mono())
+		t := outages.WallAt(d.Clock, *d.sinceMono)
 		since = &t
 	}
 	var synced *bool
