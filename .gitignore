@@ -1,4 +1,5 @@
 /netmon
 *.test
 *.out
+/coverage/
 /deploy/sites

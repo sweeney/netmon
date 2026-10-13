@@ -3,10 +3,13 @@
 # every probe aimed at this machine so the network is "ok". Checks the state
 # arrives retained, the status settles, and a SIGTERM leaves online:false.
 # About 40 s.
+#
+# With GOCOVERDIR set, the binary is built with coverage on and writes its
+# counters there (tests/coverage.sh uses this).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MOSQUITTO="${MOSQUITTO:-$(command -v mosquitto || echo /opt/homebrew/sbin/mosquitto)}"
-for b in "$MOSQUITTO" mosquitto_sub go; do command -v "$b" >/dev/null || { echo "missing: $b" >&2; exit 2; }; done
+for b in "$MOSQUITTO" mosquitto_sub go jq; do command -v "$b" >/dev/null || { echo "missing: $b" >&2; exit 2; }; done
 PORT=21893
 if nc -z 127.0.0.1 $PORT 2>/dev/null; then echo "port $PORT in use" >&2; exit 2; fi
 
@@ -44,7 +47,20 @@ broker = "tcp://127.0.0.1:$PORT"
 CFG
 mkdir -p "$WORK/state"
 mosquitto_pub -p $PORT -t sites/smoketest/bridge -r -q 1 -m 1   # retained before netmon starts, as the bridge leaves it
-(cd "$HERE/.." && go build -o "$WORK/netmon" ./cmd/netmon)
+COVER=()
+[ -n "${GOCOVERDIR:-}" ] && COVER=(-cover -coverpkg=./...)
+(cd "$HERE/.." && go build ${COVER[@]+"${COVER[@]}"} -ldflags "-X main.version=smoke" -o "$WORK/netmon" ./cmd/netmon)
+
+# The one-shot modes, before the daemon starts.
+[ "$("$WORK/netmon" -version)" = smoke ] && pass "-version" || fail "-version"
+"$WORK/netmon" -config "$WORK/config.toml" -check-config | grep -q "ok (site smoketest" && pass "-check-config" || fail "-check-config"
+printf '[site]\nid = "a/b"\n' > "$WORK/bad.toml"
+if "$WORK/netmon" -config "$WORK/bad.toml" -check-config > "$WORK/bad.log" 2>&1; then fail "bad config accepted"
+else grep -q "site.id" "$WORK/bad.log" && pass "bad config refused" || fail "bad config: $(cat "$WORK/bad.log")"; fi
+once="$("$WORK/netmon" -config "$WORK/config.toml" -once 2>"$WORK/once.log")"
+[[ "$once" == sites/smoketest/network/state* ]] && pass "-once prints the state topic" || fail "-once: $once"
+[ "$(sed 1d <<<"$once" | jq -c .checks.bridge)" = '{"ok":true,"target":"sites/smoketest/bridge"}' ] && pass "-once read the retained bridge status" || fail "-once bridge: $once"
+
 "$WORK/netmon" -config "$WORK/config.toml" > "$WORK/netmon.log" 2>&1 & NETMON_PID=$!
 
 T=sites/smoketest/network

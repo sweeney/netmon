@@ -132,3 +132,17 @@ func TestObserveAtDatesFromTheRunsFirstRound(t *testing.T) {
 		t.Errorf("got %s %v %v, want wan_down true 40", st, changed, since)
 	}
 }
+
+// A zero DownAfter or UpAfter is treated as 1: the first round settles.
+func TestHysteresisZeroMeansOne(t *testing.T) {
+	var h Hysteresis
+	if h.Current() != Unknown {
+		t.Fatalf("before any round: %s", h.Current())
+	}
+	if st, changed := h.Observe(LANDown); st != LANDown || !changed || h.Current() != LANDown {
+		t.Errorf("first round: %s %v, current %s", st, changed, h.Current())
+	}
+	if st, changed := h.Observe(OK); st != OK || !changed {
+		t.Errorf("recovery: %s %v", st, changed)
+	}
+}

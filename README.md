@@ -1,5 +1,7 @@
 # netmon
 
+[![CI](https://github.com/sweeney/netmon/actions/workflows/ci.yml/badge.svg)](https://github.com/sweeney/netmon/actions/workflows/ci.yml)
+
 Watches a site's network from its Pi and publishes what it sees to MQTT.
 
 When the schoolhouse goes dark, garibaldi sees only the bridge's
@@ -206,7 +208,40 @@ go test -race ./...          # unit and daemon tests (fake prober, clock and bro
 tests/smoke.sh               # the binary against a real mosquitto (brew install mosquitto)
 tests/remote-script.sh       # deploy/remote.sh against a fixture root
 tests/deploy-script.sh       # deploy/deploy.sh with ssh and go shimmed: sites, hosts, arch
+tests/coverage.sh [DIR]      # unit + smoke coverage merged, floors checked (default ./coverage)
 ```
 
 `tests/run-all.sh` runs them all. The probes were also run once on each host,
 unprivileged, with `-once`.
+
+### Coverage
+
+`tests/coverage.sh` runs the unit tests and the smoke test, with the smoke
+test's binary built using `-cover`, and merges the two profiles.
+`cmd/netmon` and the MQTT publisher's subscribe and reconnect paths are
+covered by a real broker rather than by mocks. The script writes
+`coverage.out`, `coverage.html` and `coverage.txt`, and fails if:
+
+- `internal/classify`, `internal/config` or `internal/payload` drop below
+  100%. These packages decide what gets published.
+- The total drops below 90%.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push and pull request.
+
+1. **Test** (Ubuntu, with mosquitto installed and unprivileged ICMP allowed,
+   as on the Pi):
+   - `go mod verify`, gofmt and `go vet`;
+   - `go test -race`;
+   - the deploy-script tests;
+   - `tests/coverage.sh`.
+
+   The run summary shows coverage by package, test counts and the slowest
+   tests. The `coverage` artifact holds the profiles, HTML report and test
+   JSON, and is kept for 30 days.
+2. **Build:** `netmon-linux-amd64` (garibaldi) and `netmon-linux-arm64` (the
+   Pis), with the same flags as `deploy/deploy.sh`, so `-version` names the
+   commit. Each binary is uploaded with its sha256 and kept for 90 days.
+   Deploys still build locally (`deploy/deploy.sh`); the CI binaries are for
+   checking and comparing.

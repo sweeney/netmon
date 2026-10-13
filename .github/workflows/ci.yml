@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  # ── test ──────────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # tests/deploy-script.sh and tests/remote-script.sh read every
+          # config netmon has shipped from the history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The smoke test runs the binary against a real broker.
+      - name: Install Mosquitto
+        run: sudo apt-get update -q && sudo apt-get install -y -q mosquitto mosquitto-clients
+
+      # The ping checks use unprivileged ICMP sockets, as on the Pi; the
+      # loopback ping test and the smoke test's gateway check need them.
+      - name: Allow unprivileged ICMP
+        run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+
+      - name: Verify module graph
+        run: go mod verify
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt-ed: $unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: |
+          # PIPESTATUS must be read straight after the pipeline: any command
+          # in between (an echo) replaces it, and a failing run passed.
+          go test -v -race -count=1 -json ./... | tee test-results.json
+          status=${PIPESTATUS[0]}
+          echo "Exit code: $status"
+          exit "$status"
+
+      - name: Script tests
+        run: |
+          for f in deploy/*.sh tests/*.sh; do bash -n "$f"; done
+          tests/remote-script.sh
+          tests/deploy-script.sh
+
+      # Unit tests and the smoke test together, with the binary built for
+      # coverage; enforces 100% on classify, config and payload and the
+      # overall floor.
+      - name: Coverage (unit + smoke)
+        run: tests/coverage.sh coverage
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          [ -f coverage/coverage.txt ] || exit 0
+          TOTAL=$(awk '/^total:/ { print $NF }' coverage/coverage.txt)
+          {
+            echo "## 📊 Coverage Report"
+            echo ""
+            echo "**Overall Coverage (unit + smoke): ${TOTAL}**"
+            echo ""
+            echo "### Coverage by Package"
+            echo ""
+            echo '```'
+            awk '/^\tgithub.com/ {
+                pkg = $1; sub("github.com/sweeney/netmon/", "", pkg); cov = $3; sub("%", "", cov)
+                filled = int(cov / 10); bar = ""
+                for (i = 0; i < 10; i++) bar = bar (i < filled ? "█" : "░")
+                printf "%-24s %s %5.1f%%\n", pkg, bar, cov }' coverage/coverage.txt
+            echo '```'
+            echo ""
+            UNCOVERED=$(grep -v "100.0%" coverage/coverage.txt | grep -v "^total:" | grep '\.go:' || true)
+            if [ -n "$UNCOVERED" ]; then
+              echo "<details>"
+              echo "<summary>⚠️ Functions below 100% coverage</summary>"
+              echo ""
+              echo '```'
+              echo "$UNCOVERED"
+              echo '```'
+              echo "</details>"
+              echo ""
+            fi
+            echo "<details>"
+            echo "<summary>📋 Full function coverage</summary>"
+            echo ""
+            echo '```'
+            grep '\.go:\|^total:' coverage/coverage.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test summary
+        if: always()
+        run: |
+          [ -f test-results.json ] || exit 0
+          PASS=$(grep '"Action":"pass"' test-results.json | grep -c '"Test"' || true)
+          FAIL=$(grep '"Action":"fail"' test-results.json | grep -c '"Test"' || true)
+          SKIP=$(grep '"Action":"skip"' test-results.json | grep -c '"Test"' || true)
+          {
+            echo "## 🧪 Test Results"
+            echo ""
+            echo "| ✅ Passed | ❌ Failed | ⏭️ Skipped |"
+            echo "|:--------:|:--------:|:---------:|"
+            echo "| $PASS | $FAIL | $SKIP |"
+            echo ""
+            if [ "$FAIL" -gt 0 ]; then
+              echo "<details open>"
+              echo "<summary>❌ Failed test output</summary>"
+              echo ""
+              echo '```'
+              jq -r 'select(.Action=="output") | select(.Test != null) | .Output // empty' \
+                test-results.json 2>/dev/null | head -200 || true
+              echo '```'
+              echo "</details>"
+              echo ""
+            fi
+            if [ "$SKIP" -gt 0 ]; then
+              echo "<details>"
+              echo "<summary>⏭️ Skipped tests</summary>"
+              echo ""
+              jq -r 'select(.Action=="skip" and .Test != null) | "- `\(.Package | split("/") | .[-1])/\(.Test)`"' \
+                test-results.json 2>/dev/null || true
+              echo "</details>"
+              echo ""
+            fi
+            echo "<details>"
+            echo "<summary>🐢 Slowest tests (top 10)</summary>"
+            echo ""
+            echo "| Test | Duration |"
+            echo "|------|----------|"
+            jq -r 'select(.Action=="pass" and .Test != null and .Elapsed != null) |
+              "\(.Package | split("/") | .[-1])/\(.Test)|\(.Elapsed)"' \
+              test-results.json 2>/dev/null | sort -t'|' -k2 -rn | head -10 | \
+              while IFS='|' read -r test dur; do echo "| \`$test\` | ${dur}s |"; done || true
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage/coverage.out
+            coverage/coverage.html
+            coverage/coverage.txt
+            test-results.json
+          retention-days: 30
+
+  # ── build ─────────────────────────────────────────────────────────────────
+  # netmon runs on the sites' Pis (arm64) and on garibaldi (amd64);
+  # deploy/deploy.sh refuses anything else.
+  build:
+    name: Build (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    needs: test
+
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # for git describe
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          # The same flags as deploy/deploy.sh, so -version names the commit.
+          VERSION=$(git describe --always --dirty)
+          go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+            -o "netmon-${{ matrix.goos }}-${{ matrix.goarch }}" ./cmd/netmon
+          sha256sum "netmon-${{ matrix.goos }}-${{ matrix.goarch }}" > "netmon-${{ matrix.goos }}-${{ matrix.goarch }}.sha256"
+
+      - name: Report binary
+        run: |
+          BIN="netmon-${{ matrix.goos }}-${{ matrix.goarch }}"
+          SIZE=$(du -sh "$BIN" | cut -f1)
+          echo "Binary \`$BIN\` ($(git describe --always --dirty)): **${SIZE}**, sha256 \`$(cut -d' ' -f1 "$BIN.sha256")\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: netmon-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            netmon-${{ matrix.goos }}-${{ matrix.goarch }}
+            netmon-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
+          retention-days: 90

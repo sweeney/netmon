@@ -95,3 +95,49 @@ func TestRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectsEachSetting(t *testing.T) {
+	base := "[site]\nid = \"home\"\n"
+	cases := map[string]string{
+		"site with a space":  "[site]\nid = \"my home\"\n",
+		"interval too short": base + "[probe]\ninterval = \"500ms\"\n",
+		"zero up_after":      base + "[probe]\nup_after = 0\n",
+		"zero count":         base + "[probe]\ncount = 0\n",
+		"zero timeout":       base + "[probe]\ntimeout = \"0s\"\n",
+		"no broker":          base + "[mqtt]\nbroker = \"\"\n",
+		"no topic prefix":    base + "[mqtt]\ntopic_prefix = \"\"\n",
+	}
+	for name, body := range cases {
+		if _, err := Load(write(t, body)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestEveryEnvOverride(t *testing.T) {
+	env := map[string]string{
+		"NETMON_MQTT_BROKER":    "tcp://broker:1883",
+		"NETMON_MQTT_CLIENT_ID": "netmon-test",
+		"NETMON_MQTT_USERNAME":  "u",
+		"NETMON_MQTT_PASSWORD":  "p",
+		"NETMON_TAILSCALE_PEER": "hub",
+		"NETMON_STATE_DIR":      "/tmp/netmon",
+		"NETMON_DOWN_AFTER":     "5",
+	}
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	cfg, err := Load(write(t, "[site]\nid = \"home\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := cfg.MQTT
+	if m.Broker != "tcp://broker:1883" || m.ClientID != "netmon-test" || m.Username != "u" || m.Password != "p" ||
+		cfg.Probe.TailscalePeer != "hub" || cfg.StateDir != "/tmp/netmon" || cfg.Probe.DownAfter != 5 {
+		t.Errorf("got %+v", cfg)
+	}
+	t.Setenv("NETMON_DOWN_AFTER", "three")
+	if _, err := Load(""); err == nil {
+		t.Error("bad NETMON_DOWN_AFTER accepted")
+	}
+}

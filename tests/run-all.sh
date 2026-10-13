@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Runs every test: Go unit and daemon tests, the deploy script against
-# fixtures, and the binary against a real mosquitto. About 1 minute.
+# Runs every test: Go unit and daemon tests, the deploy scripts against
+# fixtures, and the binary against a real mosquitto (inside coverage.sh,
+# which also checks the coverage floors). About 1½ minutes. CI runs the same
+# steps (.github/workflows/ci.yml).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export PATH="/opt/homebrew/sbin:$PATH"
@@ -11,4 +13,4 @@ go vet ./...
 echo "### go test -race"; go test -race -count=1 ./... 2>&1 | grep -v 'no test files'
 echo "### remote-script.sh"; tests/remote-script.sh
 echo "### deploy-script.sh"; tests/deploy-script.sh
-echo "### smoke.sh"; tests/smoke.sh
+echo "### coverage.sh (unit tests again, and smoke.sh)"; tests/coverage.sh "${TMPDIR:-/tmp}/netmon-coverage"

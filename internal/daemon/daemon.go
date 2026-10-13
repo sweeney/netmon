@@ -56,9 +56,6 @@ func (d *Daemon) stateTopic() string      { return d.Cfg.Topic("state") }
 func (d *Daemon) outageTopic() string     { return d.Cfg.Topic("outage") }
 func (d *Daemon) lastOutageTopic() string { return d.Cfg.Topic("last_outage") }
 
-// Status is the smoothed status.
-func (d *Daemon) Status() classify.Status { return d.hyst.Current() }
-
 // Reconnected marks everything retained for republishing, after a lost MQTT
 // connection: anything published meanwhile failed and was not queued.
 func (d *Daemon) Reconnected() {
